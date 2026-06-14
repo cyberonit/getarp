@@ -62,3 +62,9 @@ async def current_user(token: str = Depends(oauth2)) -> dict:
     if not payload.get("sub"):
         raise cred_err
     return {"username": payload["sub"], "role": payload.get("role")}
+
+
+async def require_admin(user: dict = Depends(current_user)) -> dict:
+    if user.get("role") != "admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "admin role required")
+    return user

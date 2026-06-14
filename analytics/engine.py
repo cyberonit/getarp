@@ -12,6 +12,7 @@ Everything modular: detectors/profilers are loaded from config so you can add a
 "better correlation module" or an AI scorer without editing this file.
 """
 import asyncio
+import html
 import json
 import os
 import sys
@@ -273,15 +274,17 @@ class Engine:
 
     @staticmethod
     def _render_html(kind, s):
+        esc = html.escape
         rows = "".join(
-            f"<tr><td>{a['src_ip']}</td><td>{a.get('threat_score')}</td>"
-            f"<td>{a.get('classification')}</td><td>{a.get('country') or '?'}</td></tr>"
+            f"<tr><td>{esc(str(a['src_ip']))}</td><td>{esc(str(a.get('threat_score')))}</td>"
+            f"<td>{esc(str(a.get('classification')))}</td>"
+            f"<td>{esc(str(a.get('country') or '?'))}</td></tr>"
             for a in s["top_attackers"])
-        atk = "".join(f"<li>{a['attack_type']}: {a['n']}</li>"
+        atk = "".join(f"<li>{esc(str(a['attack_type']))}: {esc(str(a['n']))}</li>"
                       for a in s["attacks_by_type"])
         return f"""<html><body style="font-family:system-ui">
-<h1>getarp.net {kind} report</h1>
-<p>Events: {s['events']} &middot; Unique IPs: {s['unique_ips']} &middot; Scans: {s['scans']}</p>
+<h1>getarp.net {esc(kind)} report</h1>
+<p>Events: {esc(str(s['events']))} &middot; Unique IPs: {esc(str(s['unique_ips']))} &middot; Scans: {esc(str(s['scans']))}</p>
 <h3>Attacks by type</h3><ul>{atk}</ul>
 <h3>Top attackers</h3>
 <table border=1 cellpadding=4><tr><th>IP</th><th>Score</th><th>Class</th><th>Country</th></tr>
