@@ -100,11 +100,13 @@ services:
     ports:
       - "127.0.0.1:8080:8080"           # LAPI bound to loopback only for host bouncer
     environment:
-      COLLECTIONS: "crowdsecurity/cowrie crowdsecurity/suricata crowdsecurity/sshd crowdsecurity/http-cve crowdsecurity/base-http-scenarios"
+      COLLECTIONS: "crowdsecurity/suricata crowdsecurity/sshd crowdsecurity/http-cve crowdsecurity/base-http-scenarios"
+      PARSERS: "crowdsecurity/cowrie-logs"
       CUSTOM_HOSTNAME: getarp
     volumes:
       - ./crowdsec/acquis.yaml:/etc/crowdsec/acquis.yaml:ro
       - ./crowdsec/profiles.yaml:/etc/crowdsec/profiles.yaml:ro
+      - ./crowdsec/whitelists.yaml:/etc/crowdsec/parsers/s02-enrich/getarp-whitelist.yaml:ro
       - honeypot_logs:/var/log/honeypot:ro
       - crowdsec_data:/var/lib/crowdsec/data
       - crowdsec_config:/etc/crowdsec
