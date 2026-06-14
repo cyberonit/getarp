@@ -1,0 +1,6 @@
+name: getarp/whitelists
+description: "Trusted admin IPs — never alert/ban on traffic from these, regardless of what Suricata/cowrie see"
+whitelist:
+  reason: "trusted admin IP (management SSH)"
+  ip:
+    - "REDACTED_ADMIN_IP"

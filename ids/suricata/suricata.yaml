@@ -38,6 +38,10 @@ outputs:
         - tls
         - flow
         - anomaly
+  - fast:
+      enabled: yes
+      filename: fast.log
+      append: yes
   - stats:
       enabled: no
 

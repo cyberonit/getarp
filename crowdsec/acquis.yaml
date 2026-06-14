@@ -4,12 +4,22 @@
 filenames:
   - /var/log/honeypot/cowrie.json
 labels:
-  type: cowrie
+  type: cowrie-json      # not parsed by CrowdSec; kept for visibility only
+---
+filenames:
+  - /var/log/honeypot/cowrie.log
+labels:
+  type: cowrie           # matches crowdsecurity/cowrie-logs parser (program == 'cowrie')
 ---
 filenames:
   - /var/log/honeypot/eve.json
 labels:
-  type: suricata-eve
+  type: suricata-eve     # not parsed by CrowdSec; kept for visibility only
+---
+filenames:
+  - /var/log/honeypot/fast.log
+labels:
+  type: suricata-fastlogs   # matches crowdsecurity/suricata-logs parser
 ---
 filenames:
   - /var/log/honeypot/extra.json
