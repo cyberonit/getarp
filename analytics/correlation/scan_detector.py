@@ -33,3 +33,8 @@ class ScanDetector(Detector):
             detail={"port_count": len(ports), "window_s": self.window_s,
                     "services": sorted(s for s in services if s)},
         )]
+
+    def prune(self, now):
+        cutoff = now - self.window_s * 2
+        for ip in [ip for ip, t in self._reported.items() if t < cutoff]:
+            del self._reported[ip]

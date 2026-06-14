@@ -62,3 +62,8 @@ class AttackDetector(Detector):
             return True
         self._reported[key] = now
         return False
+
+    def prune(self, now):
+        cutoff = now - self.bf_window * 2
+        for key in [k for k, t in self._reported.items() if t < cutoff]:
+            del self._reported[key]
