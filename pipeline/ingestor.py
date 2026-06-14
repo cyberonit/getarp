@@ -190,8 +190,10 @@ async def _upsert_ip(con, e) -> bool:
            ON CONFLICT (src_ip) DO UPDATE SET
              last_seen = now(),
              event_count = ips.event_count + 1,
-             services_hit = (SELECT ARRAY(SELECT DISTINCT unnest(ips.services_hit || $2::text))),
-             ports_hit = (SELECT ARRAY(SELECT DISTINCT unnest(ips.ports_hit || $3::int)))
+             services_hit = CASE WHEN $2 = ANY(ips.services_hit) THEN ips.services_hit
+                                  ELSE ips.services_hit || $2::text END,
+             ports_hit = CASE WHEN $3 = ANY(ips.ports_hit) THEN ips.ports_hit
+                              ELSE ips.ports_hit || $3::int END
            RETURNING (xmax = 0) AS inserted""",
         e["src_ip"], e["service"] or "tcp", e["dst_port"] or 0,
     )

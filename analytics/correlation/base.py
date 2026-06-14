@@ -31,6 +31,10 @@ class Detector:
         """window = list of recent event dicts for this ip (oldest..newest)."""
         return []
 
+    def prune(self, now: float) -> None:
+        """Drop stale per-IP dedupe state. Override if the detector keeps one."""
+        return
+
 
 _REGISTRY: dict[str, type[Detector]] = {}
 

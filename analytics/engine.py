@@ -17,7 +17,7 @@ import os
 import sys
 import time
 from collections import defaultdict, deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import asyncpg
 import redis.asyncio as redis
@@ -152,7 +152,33 @@ class Engine:
                 await self.snapshot_status()
             except Exception as e:
                 print(f"[analytics] status: {e}", flush=True)
+            self.gc_state()
             await asyncio.sleep(interval)
+
+    # ───────────────── periodic memory cleanup ─────────────────
+    def gc_state(self):
+        """Drop in-memory per-IP state for attackers we haven't heard from in a
+        while, so a long-running engine doesn't accumulate one entry per IP
+        ever seen across its whole uptime."""
+        now = time.time()
+        win_cutoff = now - WINDOW_KEEP_S
+        stale_windows = [ip for ip, w in self.windows.items()
+                         if not w or w[-1]["_recv"] < win_cutoff]
+        for ip in stale_windows:
+            del self.windows[ip]
+
+        profile_cutoff = now - 86400  # 24h of inactivity
+        stale_profiles = [ip for ip, p in self.profiles.items()
+                          if p.get("last", 0) < profile_cutoff]
+        for ip in stale_profiles:
+            del self.profiles[ip]
+
+        for det in self.detectors:
+            det.prune(now)
+
+        if stale_windows or stale_profiles:
+            print(f"[analytics] gc: dropped {len(stale_windows)} windows, "
+                  f"{len(stale_profiles)} profiles", flush=True)
 
     async def snapshot_status(self):
         async with self.pool.acquire() as con:
@@ -207,13 +233,14 @@ class Engine:
         hour = int(self.settings.get("REPORT_CRON_HOUR", 6))
         while True:
             now = datetime.now(timezone.utc)
-            if now.hour == hour and now.minute < 5:
-                try:
-                    await self.build_report("daily", "1 day")
-                except Exception as e:
-                    print(f"[analytics] report: {e}", flush=True)
-                await asyncio.sleep(3600)
-            await asyncio.sleep(120)
+            target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+            if target <= now:
+                target += timedelta(days=1)
+            await asyncio.sleep((target - now).total_seconds())
+            try:
+                await self.build_report("daily", "1 day")
+            except Exception as e:
+                print(f"[analytics] report: {e}", flush=True)
 
     async def build_report(self, kind: str, span: str):
         async with self.pool.acquire() as con:

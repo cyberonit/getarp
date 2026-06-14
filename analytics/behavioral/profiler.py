@@ -49,7 +49,7 @@ class BehavioralProfiler:
 
         cmd = event.get("command") or ""
         if cmd and event.get("event_type") == "command":
-            if cmd not in profile["commands_seen"]:
+            if cmd not in profile["commands_seen"] and len(profile["commands_seen"]) < 200:
                 profile["commands_seen"].append(cmd[:300])
             for name, rx in TOOLING_SIGNS.items():
                 if rx.search(cmd):

@@ -39,6 +39,8 @@ CREATE TABLE ips (
     threat_score  REAL        NOT NULL DEFAULT 0,     -- 0..100, set by analytics
     classification TEXT        DEFAULT 'unknown'      -- scanner|bruteforcer|exploiter|...
 );
+CREATE INDEX idx_ips_first_seen ON ips (first_seen);
+CREATE INDEX idx_ips_last_seen  ON ips (last_seen);
 
 -- enrichment, keyed by IP, written by the swappable provider
 CREATE TABLE ip_enrichment (
@@ -67,6 +69,7 @@ CREATE TABLE scan_events (
     detail      JSONB
 );
 CREATE INDEX idx_scan_src ON scan_events (src_ip, ts DESC);
+CREATE INDEX idx_scan_ts  ON scan_events (ts DESC);
 
 -- correlated attack events
 CREATE TABLE attack_events (
@@ -80,6 +83,7 @@ CREATE TABLE attack_events (
     ai_score    REAL                   -- reserved for a future AI/ML module
 );
 CREATE INDEX idx_attack_src ON attack_events (src_ip, ts DESC);
+CREATE INDEX idx_attack_ts  ON attack_events (ts DESC);
 
 -- per-IP behavioral profile (one row, upserted)
 CREATE TABLE behavior_profiles (
