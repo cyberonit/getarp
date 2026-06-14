@@ -9,6 +9,14 @@
 getarp.net, www.getarp.net {
 	encode zstd gzip
 
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' wss://getarp.net wss://www.getarp.net"
+		-Server
+	}
+
 	# WebSocket + REST API -> backend
 	@api path /api/*
 	reverse_proxy @api api:8000

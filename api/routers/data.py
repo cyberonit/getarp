@@ -1,5 +1,7 @@
 """Read-only data endpoints powering the public dashboard."""
-from fastapi import APIRouter, Query
+import ipaddress
+
+from fastapi import APIRouter, HTTPException, Query
 import db
 
 router = APIRouter(prefix="/api", tags=["data"])
@@ -21,6 +23,10 @@ async def list_ips(limit: int = Query(100, le=500), order: str = "threat_score")
 
 @router.get("/ips/{ip}")
 async def ip_detail(ip: str):
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError:
+        raise HTTPException(400, "invalid IP address")
     async with db.pool().acquire() as con:
         info = await con.fetchrow("""
             SELECT i.*, e.country, e.asn, e.org, e.reputation, e.categories,

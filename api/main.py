@@ -15,7 +15,9 @@ from routers import data, admin
 
 app = FastAPI(title="getarp Defence Intelligence API", version="0.1")
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+    CORSMiddleware,
+    allow_origins=["https://getarp.net", "https://www.getarp.net"],
+    allow_methods=["*"], allow_headers=["*"])
 app.include_router(data.router)
 app.include_router(admin.router)
 

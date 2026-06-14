@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 import db
-from auth import current_user
+from auth import require_admin
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -14,14 +14,14 @@ class Setting(BaseModel):
 
 
 @router.get("/settings")
-async def get_settings(user=Depends(current_user)):
+async def get_settings(user=Depends(require_admin)):
     async with db.pool().acquire() as con:
         rows = await con.fetch("SELECT key, value, updated_at FROM settings ORDER BY key")
     return [dict(r) for r in rows]
 
 
 @router.put("/settings")
-async def put_setting(s: Setting, user=Depends(current_user)):
+async def put_setting(s: Setting, user=Depends(require_admin)):
     async with db.pool().acquire() as con:
         await con.execute(
             """INSERT INTO settings (key, value, updated_at) VALUES ($1,$2, now())
@@ -32,7 +32,7 @@ async def put_setting(s: Setting, user=Depends(current_user)):
 
 
 @router.get("/health")
-async def health(user=Depends(current_user)):
+async def health(user=Depends(require_admin)):
     async with db.pool().acquire() as con:
         ev = await con.fetchval("SELECT count(*) FROM events WHERE ts>now()-interval '1 hour'")
         ips = await con.fetchval("SELECT count(*) FROM ips")
