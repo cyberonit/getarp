@@ -1,0 +1,68 @@
+%YAML 1.1
+---
+# Lean Suricata config for the getarp honeypot sensor. Low-volume tuning.
+# Update ET Open rules with: suricata-update (see ids/suricata/README.md)
+
+vars:
+  address-groups:
+    HOME_NET: "any"          # the honeypot IS the target; everything inbound is interesting
+    EXTERNAL_NET: "any"
+  port-groups:
+    HTTP_PORTS: "80,8080,8081"
+    SSH_PORTS: "22,2222"
+
+default-log-dir: /var/log/suricata
+
+# ───────────────────────── capture ─────────────────────────
+af-packet:
+  - interface: default
+    cluster-id: 99
+    cluster-type: cluster_flow
+    defrag: yes
+    threads: 2               # low-volume honeypot; cap threads to stay in CPU budget
+
+# ───────────────────────── outputs ─────────────────────────
+outputs:
+  - eve-log:
+      enabled: yes
+      filetype: regular
+      filename: /var/log/suricata/eve.json
+      types:
+        - alert:
+            payload: yes
+            payload-printable: yes
+            metadata: yes
+        - http:
+            extended: yes
+        - dns
+        - tls
+        - flow
+        - anomaly
+  - stats:
+      enabled: no
+
+# ───────────────────────── rules ─────────────────────────
+default-rule-path: /etc/suricata/rules
+rule-files:
+  - suricata.rules        # ET Open, populated by suricata-update
+  - getarp-local.rules    # our custom honeypot rules
+
+classification-file: /etc/suricata/classification.config
+reference-config-file: /etc/suricata/reference.config
+
+# ───────────────────────── app layer (defaults are fine, keep common protos) ──────
+app-layer:
+  protocols:
+    http: {enabled: yes}
+    ssh:  {enabled: yes}
+    tls:  {enabled: yes}
+    dns:  {enabled: yes}
+    ftp:  {enabled: yes}
+
+logging:
+  default-log-level: notice
+  outputs:
+    - console: {enabled: yes}
+
+detect:
+  profile: low             # smaller memory footprint for the PoC box
