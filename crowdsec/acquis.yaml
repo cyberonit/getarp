@@ -1,0 +1,17 @@
+# Which logs CrowdSec ingests. These are the same JSON files the pipeline reads,
+# mounted read-only. Detection (CrowdSec) is decoupled from analytics on purpose.
+---
+filenames:
+  - /var/log/honeypot/cowrie.json
+labels:
+  type: cowrie
+---
+filenames:
+  - /var/log/honeypot/eve.json
+labels:
+  type: suricata-eve
+---
+filenames:
+  - /var/log/honeypot/extra.json
+labels:
+  type: syslog          # parsed by a custom whitelist/notification only; mainly for visibility

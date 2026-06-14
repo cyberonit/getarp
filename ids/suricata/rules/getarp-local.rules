@@ -1,0 +1,32 @@
+# getarp custom honeypot rules.
+# Because the box is a honeypot, ANY successful interaction is suspicious.
+# sids 9000000+ are reserved for local rules.
+
+# Port scan-ish: many SYNs to closed-ish honeypot ports
+alert tcp any any -> $HOME_NET any (msg:"GETARP Possible TCP port scan"; \
+  flags:S; flow:to_server; threshold:type both, track by_src, count 15, seconds 30; \
+  classtype:attempted-recon; sid:9000001; rev:1;)
+
+# SSH brute force pattern hitting the honeypot
+alert tcp any any -> $HOME_NET 22 (msg:"GETARP SSH connection burst (brute-force suspect)"; \
+  flow:to_server; threshold:type both, track by_src, count 8, seconds 60; \
+  classtype:attempted-admin; sid:9000002; rev:1;)
+
+# Any inbound to the fake MySQL is noteworthy (nobody legit talks to it)
+alert tcp any any -> $HOME_NET 3306 (msg:"GETARP Fake-DB (MySQL) probe"; \
+  flow:to_server; classtype:attempted-recon; sid:9000003; rev:1;)
+
+# Redis unauthenticated access attempts (classic worm vector)
+alert tcp any any -> $HOME_NET 6379 (msg:"GETARP Redis access attempt"; \
+  flow:to_server; content:"AUTH"; nocase; \
+  classtype:attempted-admin; sid:9000004; rev:1;)
+
+# Common web shell / exploit path probing on the fake HTTP
+alert http any any -> $HOME_NET any (msg:"GETARP Suspicious HTTP path probe"; \
+  flow:to_server; http.uri; pcre:"/(\.env|wp-login|phpmyadmin|\/\.git|cgi-bin|boaform|shell\?)/i"; \
+  classtype:web-application-attack; sid:9000005; rev:1;)
+
+# Mirai-style telnet credential stuffing markers
+alert tcp any any -> $HOME_NET 23 (msg:"GETARP Telnet IoT botnet probe"; \
+  flow:to_server; classtype:attempted-admin; \
+  threshold:type both, track by_src, count 5, seconds 60; sid:9000006; rev:1;)

@@ -1,0 +1,21 @@
+# How CrowdSec turns alerts into decisions. The firewall-bouncer enforces these
+# on host nftables. Tuned aggressive because this is a honeypot: legit users do
+# not connect here, so a confirmed attacker can be banned hard.
+
+name: getarp_ban_aggressive
+filters:
+  - Alert.Remediation == true && Alert.GetScenario() startsWith "crowdsecurity/"
+decisions:
+  - type: ban
+    duration: 8h
+on_success: break
+
+---
+name: getarp_default
+filters:
+  - Alert.Remediation == true
+decisions:
+  - type: ban
+    duration: 4h
+# notify integrations (Slack/email/HTTP) can be wired here later
+on_success: break
