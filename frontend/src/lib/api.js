@@ -19,6 +19,7 @@ export const api = {
   attacks: () => get('/attacks'),
   behavior: () => get('/behavior'),
   map: () => get('/map'),
+  topAS: (window = '1h') => get(`/top-as?window=${window}`),
   reports: () => get('/reports'),
   report: (id) => get(`/reports/${id}`),
   reportCsvUrl: (id) => `${BASE}/reports/${id}/csv`,
