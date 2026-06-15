@@ -48,29 +48,8 @@ export function Settings() {
             ))}</tbody></table>
           {msg && <div className="muted" style={{ marginTop: 10 }}>{msg}</div>}
         </div></div>
-      <BouncerManager />
       <CrowdSecConsole />
-      <CowrieViewer />
     </>
-  )
-}
-
-function BouncerManager() {
-  const [rows, setRows] = useState([]); const [err, setErr] = useState('')
-  useEffect(() => { api.crowdsecDecisions().then(setRows).catch(() => setErr('Could not reach CrowdSec LAPI.')) }, [])
-  return (
-    <div className="card"><h3><span>bouncer manager</span><span>{rows.length} active bans</span></h3>
-      <div className="body">
-        <p className="muted">IPs currently blocked by the host firewall bouncer (live from the CrowdSec LAPI).</p>
-        <table><thead><tr><th>ip</th><th>scenario</th><th>type</th><th>duration</th><th>origin</th></tr></thead>
-          <tbody>{rows.map((d) => (
-            <tr key={d.id}>
-              <td>{d.ip}</td><td className="muted">{d.scenario}</td><td>{d.type}</td>
-              <td>{d.duration}</td><td className="muted">{d.origin}</td>
-            </tr>
-          ))}</tbody></table>
-        {err && <div className="err" style={{ marginTop: 10 }}>{err}</div>}
-      </div></div>
   )
 }
 
@@ -97,29 +76,6 @@ function CrowdSecConsole() {
               ))}</tbody></table>
           </div>
         </div>
-        {err && <div className="err" style={{ marginTop: 10 }}>{err}</div>}
-      </div></div>
-  )
-}
-
-function CowrieViewer() {
-  const [rows, setRows] = useState([]); const [err, setErr] = useState('')
-  useEffect(() => { api.cowrieSessions().then(setRows).catch(() => setErr('Could not read Cowrie logs.')) }, [])
-  return (
-    <div className="card"><h3><span>cowrie honeypot</span><span>{rows.length} recent sessions</span></h3>
-      <div className="body">
-        <p className="muted">Recent SSH/Telnet sessions: login attempts, commands run, and file transfers.</p>
-        <table><thead><tr><th>src ip</th><th>proto</th><th>logins</th><th>commands</th><th>files</th></tr></thead>
-          <tbody>{rows.map((s) => (
-            <tr key={s.session}>
-              <td>{s.src_ip}</td><td className="muted">{s.protocol}</td>
-              <td>{s.logins.map((l, i) => (
-                <div key={i} className="muted">{l.username}/{l.password}{l.success ? ' ✓' : ''}</div>
-              ))}</td>
-              <td>{s.commands.map((c, i) => <div key={i} className="muted">{c}</div>)}</td>
-              <td>{s.files.map((f, i) => <div key={i} className="muted">{f.direction}: {f.url || f.outfile}</div>)}</td>
-            </tr>
-          ))}</tbody></table>
         {err && <div className="err" style={{ marginTop: 10 }}>{err}</div>}
       </div></div>
   )
