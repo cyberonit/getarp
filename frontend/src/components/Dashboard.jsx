@@ -3,10 +3,14 @@ import { api } from '../lib/api.js'
 
 const scoreClass = (s) => s >= 70 ? 's-hi' : s >= 35 ? 's-mid' : 's-lo'
 
+const AS_WINDOWS = [['1h', '1h'], ['24h', '24h'], ['7d', '7d'], ['30d', '30d']]
+
 export default function Dashboard({ onPick }) {
   const [status, setStatus] = useState({})
   const [ips, setIps] = useState([])
   const [feed, setFeed] = useState([])
+  const [topAS, setTopAS] = useState([])
+  const [asWindow, setAsWindow] = useState('1h')
   const wsRef = useRef(null)
 
   async function refresh() {
@@ -25,9 +29,14 @@ export default function Dashboard({ onPick }) {
     return () => { clearInterval(poll); ws.close() }
   }, [])
 
+  useEffect(() => {
+    api.topAS(asWindow).then(setTopAS).catch(() => setTopAS([]))
+  }, [asWindow])
+
   const level = status.threat_level || 'low'
   const countries = status.top_countries || []
   const maxC = Math.max(1, ...countries.map((c) => c.n))
+  const ipInfo = Object.fromEntries(ips.map((ip) => [ip.src_ip, ip]))
 
   return (
     <>
@@ -56,13 +65,18 @@ export default function Dashboard({ onPick }) {
         <h3><span>live feed</span><span>realtime</span></h3>
         <div className="body feed">
           {feed.length === 0 && <div className="muted">waiting for activity…</div>}
-          {feed.map((e, i) => (
-            <div key={i} className={`e ${e.type}`}>
-              <span className="t">{e.at.toLocaleTimeString()}</span>
-              <span className="lbl">{e.type === 'attack' ? '⚠' : '⦿'} {e.label}</span>
-              <span className="ip" onClick={() => onPick(e.src_ip)}>{e.src_ip}</span>
-            </div>
-          ))}
+          {feed.map((e, i) => {
+            const info = ipInfo[e.src_ip]
+            return (
+              <div key={i} className={`e ${e.type}`}>
+                <span className="t">{e.at.toLocaleTimeString()}</span>
+                <span className="lbl">{e.type === 'attack' ? '⚠' : '⦿'} {e.label}</span>
+                <span className="ip" onClick={() => onPick(e.src_ip)}>{e.src_ip}</span>
+                <span className="muted">{info?.country || '—'}</span>
+                <span className="muted">{info?.org || info?.asn || '—'}</span>
+              </div>
+            )
+          })}
         </div>
       </div>
 
@@ -71,7 +85,7 @@ export default function Dashboard({ onPick }) {
           <h3><span>top attackers</span><span>by threat score</span></h3>
           <div className="body">
             <table>
-              <thead><tr><th>ip</th><th>score</th><th>class</th><th>country</th>
+              <thead><tr><th>ip</th><th>score</th><th>class</th><th>country</th><th>as</th>
                 <th>svcs</th><th>events</th></tr></thead>
               <tbody>
                 {ips.slice(0, 18).map((ip) => (
@@ -80,6 +94,7 @@ export default function Dashboard({ onPick }) {
                     <td className={`score ${scoreClass(ip.threat_score)}`}>{Math.round(ip.threat_score)}</td>
                     <td><span className={`tag ${ip.classification}`}>{ip.classification}</span></td>
                     <td>{ip.country || '—'}</td>
+                    <td className="muted">{ip.org || ip.asn || '—'}</td>
                     <td>{(ip.services_hit || []).length}</td>
                     <td>{ip.event_count}</td>
                   </tr>
@@ -100,6 +115,24 @@ export default function Dashboard({ onPick }) {
                 <span className="n">{c.n}</span>
               </div>
             ))}
+          </div>
+        </div>
+
+        <div className="card">
+          <h3><span>top AS</span>
+            <span>
+              {AS_WINDOWS.map(([k, label]) => (
+                <a key={k} onClick={() => setAsWindow(k)}
+                  style={{ marginLeft: 8, fontWeight: k === asWindow ? 'bold' : 'normal' }}>{label}</a>
+              ))}
+            </span>
+          </h3>
+          <div className="body">
+            {topAS.length === 0 && <div className="muted">no enriched events in this window</div>}
+            <table><thead><tr><th>asn</th><th>org</th><th>events</th></tr></thead>
+              <tbody>{topAS.map((a) => (
+                <tr key={a.asn}><td>{a.asn}</td><td className="muted">{a.org || '—'}</td><td>{a.n}</td></tr>
+              ))}</tbody></table>
           </div>
         </div>
       </div>

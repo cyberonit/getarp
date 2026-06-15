@@ -83,8 +83,10 @@ async def ip_detail(ip: str):
 async def scans(limit: int = Query(100, le=500)):
     async with db.pool().acquire() as con:
         rows = await con.fetch(
-            "SELECT id, ts, src_ip::text, scan_type, port_count, ports, detail "
-            "FROM scan_events ORDER BY ts DESC LIMIT $1", limit)
+            "SELECT s.id, s.ts, s.src_ip::text, s.scan_type, s.port_count, s.ports, s.detail, "
+            "e.country, e.asn, e.org "
+            "FROM scan_events s LEFT JOIN ip_enrichment e ON e.src_ip=s.src_ip "
+            "ORDER BY s.ts DESC LIMIT $1", limit)
     return [dict(r) for r in rows]
 
 
@@ -92,8 +94,10 @@ async def scans(limit: int = Query(100, le=500)):
 async def attacks(limit: int = Query(100, le=500)):
     async with db.pool().acquire() as con:
         rows = await con.fetch(
-            "SELECT id, ts, src_ip::text, attack_type, service, severity, evidence "
-            "FROM attack_events ORDER BY ts DESC LIMIT $1", limit)
+            "SELECT a.id, a.ts, a.src_ip::text, a.attack_type, a.service, a.severity, a.evidence, "
+            "e.country, e.asn, e.org "
+            "FROM attack_events a LEFT JOIN ip_enrichment e ON e.src_ip=a.src_ip "
+            "ORDER BY a.ts DESC LIMIT $1", limit)
     return [dict(r) for r in rows]
 
 
@@ -101,9 +105,25 @@ async def attacks(limit: int = Query(100, le=500)):
 async def behavior(limit: int = Query(100, le=500)):
     async with db.pool().acquire() as con:
         rows = await con.fetch(
-            "SELECT src_ip::text, sessions, threat_score, tooling_hints, tactics, "
-            "commands_seen, updated_at FROM behavior_profiles "
-            "ORDER BY threat_score DESC LIMIT $1", limit)
+            "SELECT b.src_ip::text, b.sessions, b.threat_score, b.tooling_hints, b.tactics, "
+            "b.commands_seen, b.updated_at, e.country, e.asn, e.org "
+            "FROM behavior_profiles b LEFT JOIN ip_enrichment e ON e.src_ip=b.src_ip "
+            "ORDER BY b.threat_score DESC LIMIT $1", limit)
+    return [dict(r) for r in rows]
+
+
+@router.get("/top-as")
+async def top_as(window: str = Query("1h")):
+    spans = {"1h": "1 hour", "24h": "24 hours", "7d": "7 days", "30d": "30 days"}
+    span = spans.get(window)
+    if not span:
+        raise HTTPException(400, "invalid window")
+    async with db.pool().acquire() as con:
+        rows = await con.fetch(f"""
+            SELECT e.asn, e.org, count(*) n
+            FROM events ev JOIN ip_enrichment e ON e.src_ip = ev.src_ip
+            WHERE ev.ts > now() - interval '{span}' AND e.asn IS NOT NULL
+            GROUP BY e.asn, e.org ORDER BY n DESC LIMIT 10""")
     return [dict(r) for r in rows]
 
 
@@ -151,9 +171,10 @@ async def report_csv(rid: int):
     w.writerow([])
 
     w.writerow(["top_attackers"])
-    w.writerow(["src_ip", "threat_score", "classification", "country"])
+    w.writerow(["src_ip", "threat_score", "classification", "country", "asn", "org"])
     for a in summary.get("top_attackers", []):
-        w.writerow([a.get("src_ip"), a.get("threat_score"), a.get("classification"), a.get("country")])
+        w.writerow([a.get("src_ip"), a.get("threat_score"), a.get("classification"),
+                     a.get("country"), a.get("asn"), a.get("org")])
 
     buf.seek(0)
     return StreamingResponse(

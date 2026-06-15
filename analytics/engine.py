@@ -255,7 +255,7 @@ class Engine:
                 f"""SELECT attack_type, count(*) n FROM attack_events
                     WHERE ts > now()-interval '{span}' GROUP BY attack_type ORDER BY n DESC""")
             top = await con.fetch(
-                f"""SELECT i.src_ip, i.threat_score, i.classification, e.country
+                f"""SELECT i.src_ip, i.threat_score, i.classification, e.country, e.asn, e.org
                     FROM ips i LEFT JOIN ip_enrichment e ON e.src_ip=i.src_ip
                     WHERE i.last_seen > now()-interval '{span}'
                     ORDER BY i.threat_score DESC LIMIT 20""")
@@ -278,7 +278,9 @@ class Engine:
         rows = "".join(
             f"<tr><td>{esc(str(a['src_ip']))}</td><td>{esc(str(a.get('threat_score')))}</td>"
             f"<td>{esc(str(a.get('classification')))}</td>"
-            f"<td>{esc(str(a.get('country') or '?'))}</td></tr>"
+            f"<td>{esc(str(a.get('country') or '?'))}</td>"
+            f"<td>{esc(str(a.get('asn') or '?'))}</td>"
+            f"<td>{esc(str(a.get('org') or '?'))}</td></tr>"
             for a in s["top_attackers"])
         atk = "".join(f"<li>{esc(str(a['attack_type']))}: {esc(str(a['n']))}</li>"
                       for a in s["attacks_by_type"])
@@ -287,7 +289,7 @@ class Engine:
 <p>Events: {esc(str(s['events']))} &middot; Unique IPs: {esc(str(s['unique_ips']))} &middot; Scans: {esc(str(s['scans']))}</p>
 <h3>Attacks by type</h3><ul>{atk}</ul>
 <h3>Top attackers</h3>
-<table border=1 cellpadding=4><tr><th>IP</th><th>Score</th><th>Class</th><th>Country</th></tr>
+<table border=1 cellpadding=4><tr><th>IP</th><th>Score</th><th>Class</th><th>Country</th><th>AS</th><th>Org</th></tr>
 {rows}</table></body></html>"""
 
 
