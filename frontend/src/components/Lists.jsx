@@ -9,10 +9,11 @@ export function Scans({ onPick }) {
   return (
     <div className="card"><h3><span>scan correlation</span><span>{rows.length}</span></h3>
       <div className="body"><table>
-        <thead><tr><th>time</th><th>ip</th><th>type</th><th>ports</th><th>port list</th></tr></thead>
+        <thead><tr><th>time</th><th>ip</th><th>country</th><th>as</th><th>type</th><th>ports</th><th>port list</th></tr></thead>
         <tbody>{rows.map((r) => (
           <tr key={r.id}><td className="muted">{fmt(r.ts)}</td>
             <td className="ip" onClick={() => onPick(r.src_ip)}>{r.src_ip}</td>
+            <td>{r.country || '—'}</td><td className="muted">{r.org || r.asn || '—'}</td>
             <td><span className="tag scanner">{r.scan_type}</span></td>
             <td>{r.port_count}</td><td className="muted">{(r.ports || []).join(' ')}</td></tr>
         ))}</tbody></table></div></div>
@@ -25,10 +26,11 @@ export function Attacks({ onPick }) {
   return (
     <div className="card"><h3><span>attack correlation</span><span>{rows.length}</span></h3>
       <div className="body"><table>
-        <thead><tr><th>time</th><th>ip</th><th>type</th><th>service</th><th>sev</th><th>evidence</th></tr></thead>
+        <thead><tr><th>time</th><th>ip</th><th>country</th><th>as</th><th>type</th><th>service</th><th>sev</th><th>evidence</th></tr></thead>
         <tbody>{rows.map((r) => (
           <tr key={r.id}><td className="muted">{fmt(r.ts)}</td>
             <td className="ip" onClick={() => onPick(r.src_ip)}>{r.src_ip}</td>
+            <td>{r.country || '—'}</td><td className="muted">{r.org || r.asn || '—'}</td>
             <td><span className="tag exploiter">{r.attack_type}</span></td>
             <td>{r.service || '—'}</td><td>{r.severity}</td>
             <td className="muted">{JSON.stringify(r.evidence).slice(0, 70)}</td></tr>
@@ -42,10 +44,11 @@ export function Behavior({ onPick }) {
   return (
     <div className="card"><h3><span>behavioral profiles</span><span>{rows.length}</span></h3>
       <div className="body"><table>
-        <thead><tr><th>ip</th><th>score</th><th>sessions</th><th>tooling</th><th>tactics</th></tr></thead>
+        <thead><tr><th>ip</th><th>country</th><th>as</th><th>score</th><th>sessions</th><th>tooling</th><th>tactics</th></tr></thead>
         <tbody>{rows.map((r) => (
           <tr key={r.src_ip}>
             <td className="ip" onClick={() => onPick(r.src_ip)}>{r.src_ip}</td>
+            <td>{r.country || '—'}</td><td className="muted">{r.org || r.asn || '—'}</td>
             <td className="score s-hi">{Math.round(r.threat_score)}</td>
             <td>{r.sessions}</td>
             <td className="muted">{(r.tooling_hints || []).join(', ') || '—'}</td>
