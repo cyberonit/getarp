@@ -7,6 +7,20 @@ from auth import require_admin
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
+# Keys consumed by pipeline/analytics/enrichment at startup (see their
+# settings.get(...) calls / db/init.sql defaults). Reject anything else so the
+# settings table can't be used as an arbitrary key/value store.
+ALLOWED_SETTINGS = {
+    "enrichment_provider",
+    "scan_port_threshold",
+    "scan_window_seconds",
+    "bruteforce_threshold",
+    "bruteforce_window_seconds",
+    "status_interval_seconds",
+    "report_cron_hour",
+    "enabled_detectors",
+}
+
 
 class Setting(BaseModel):
     key: str
@@ -22,6 +36,8 @@ async def get_settings(user=Depends(require_admin)):
 
 @router.put("/settings")
 async def put_setting(s: Setting, user=Depends(require_admin)):
+    if s.key not in ALLOWED_SETTINGS:
+        raise HTTPException(400, f"unknown setting key: {s.key!r}")
     async with db.pool().acquire() as con:
         await con.execute(
             """INSERT INTO settings (key, value, updated_at) VALUES ($1,$2, now())

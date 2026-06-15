@@ -17,18 +17,16 @@ getarp.net, www.getarp.net {
 		-Server
 	}
 
+	# ── Lock down the admin/settings surface to the operator's IP ──
+	@admin {
+		path /api/admin/* /api/auth/*
+		not remote_ip REDACTED_ADMIN_IP
+	}
+	respond @admin "forbidden" 403
+
 	# WebSocket + REST API -> backend
 	@api path /api/*
 	reverse_proxy @api api:8000
-
-	# ── Lock down the admin/settings surface (RECOMMENDED) ──
-	# Uncomment and set your operator IPs. The public gets the read-only
-	# dashboard; settings + admin endpoints become reachable only from here.
-	# @admin {
-	#   path /api/admin/* /api/auth/*
-	#   not remote_ip 203.0.113.10 198.51.100.0/24
-	# }
-	# respond @admin "forbidden" 403
 
 	# Everything else -> the React dashboard
 	reverse_proxy frontend:80

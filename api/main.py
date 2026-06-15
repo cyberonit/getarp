@@ -5,7 +5,7 @@ import json
 import os
 
 import redis.asyncio as redis
-from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 
@@ -34,12 +34,27 @@ async def startup():
 
 
 # ───────────────────────── auth ─────────────────────────
+LOGIN_MAX_ATTEMPTS = 5
+LOGIN_WINDOW_SECONDS = 900  # 15 min
+
+
 @app.post("/api/auth/login")
-async def login(form: OAuth2PasswordRequestForm = Depends()):
+async def login(request: Request, form: OAuth2PasswordRequestForm = Depends()):
+    ip = (request.headers.get("x-forwarded-for") or
+          (request.client.host if request.client else "unknown")).split(",")[0].strip()
+    key = f"login:fails:{ip}"
+    fails = int(await R.get(key) or 0)
+    if fails >= LOGIN_MAX_ATTEMPTS:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
+                            "too many failed login attempts, try again later")
     user = await auth.authenticate(form.username, form.password)
     if not user:
-        from fastapi import HTTPException, status
+        async with R.pipeline() as p:
+            await p.incr(key)
+            await p.expire(key, LOGIN_WINDOW_SECONDS, nx=True)
+            await p.execute()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "bad credentials")
+    await R.delete(key)
     return {"access_token": auth.make_token(user["username"], user["role"]),
             "token_type": "bearer", "role": user["role"]}
 
