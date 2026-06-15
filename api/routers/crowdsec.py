@@ -22,10 +22,14 @@ async def _decisions():
     return r.json() or []
 
 
+async def local_decisions():
+    """Bans from this sensor's own detections (excludes the CAPI community blocklist)."""
+    return [d for d in await _decisions() if d.get("origin") != "CAPI"]
+
+
 @router.get("/decisions")
 async def decisions(limit: int = Query(100, le=500), user=Depends(require_admin)):
-    """Bans from this sensor's own detections (excludes the CAPI community blocklist)."""
-    rows = [d for d in await _decisions() if d.get("origin") != "CAPI"]
+    rows = await local_decisions()
     return [{
         "id": d.get("id"),
         "ip": d.get("value"),
