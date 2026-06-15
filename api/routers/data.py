@@ -1,10 +1,40 @@
 """Read-only data endpoints powering the public dashboard."""
+import csv
+import io
 import ipaddress
+import os
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import FileResponse, StreamingResponse
 import db
 
 router = APIRouter(prefix="/api", tags=["data"])
+
+DOCS_DIR = os.environ.get("DOCS_DIR", "/app/docs")
+ALLOWED_DOCS = {
+    "hld.pdf": "High-Level Design",
+    "lld.pdf": "Low-Level Design",
+}
+
+
+@router.get("/docs")
+async def list_docs():
+    out = []
+    for name, label in ALLOWED_DOCS.items():
+        path = os.path.join(DOCS_DIR, name)
+        if os.path.isfile(path):
+            out.append({"name": name, "label": label, "size": os.path.getsize(path)})
+    return out
+
+
+@router.get("/docs/{name}")
+async def get_doc(name: str):
+    if name not in ALLOWED_DOCS:
+        raise HTTPException(404, "not found")
+    path = os.path.join(DOCS_DIR, name)
+    if not os.path.isfile(path):
+        raise HTTPException(404, "not found")
+    return FileResponse(path, media_type="application/pdf", filename=name)
 
 
 @router.get("/ips")
@@ -92,3 +122,43 @@ async def report_html(rid: int):
     async with db.pool().acquire() as con:
         row = await con.fetchrow("SELECT html, summary FROM reports WHERE id=$1", rid)
     return {"html": row["html"] if row else "", "summary": row["summary"] if row else {}}
+
+
+@router.get("/reports/{rid}/csv")
+async def report_csv(rid: int):
+    async with db.pool().acquire() as con:
+        row = await con.fetchrow(
+            "SELECT id, created_at, kind, period_from, period_to, summary FROM reports WHERE id=$1", rid)
+    if not row:
+        raise HTTPException(404, "not found")
+    summary = row["summary"] or {}
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["report_id", row["id"]])
+    w.writerow(["created_at", row["created_at"]])
+    w.writerow(["kind", row["kind"]])
+    w.writerow(["period_from", row["period_from"]])
+    w.writerow(["period_to", row["period_to"]])
+    w.writerow(["events", summary.get("events")])
+    w.writerow(["unique_ips", summary.get("unique_ips")])
+    w.writerow(["scans", summary.get("scans")])
+    w.writerow([])
+
+    w.writerow(["attacks_by_type"])
+    w.writerow(["attack_type", "count"])
+    for a in summary.get("attacks_by_type", []):
+        w.writerow([a.get("attack_type"), a.get("n")])
+    w.writerow([])
+
+    w.writerow(["top_attackers"])
+    w.writerow(["src_ip", "threat_score", "classification", "country"])
+    for a in summary.get("top_attackers", []):
+        w.writerow([a.get("src_ip"), a.get("threat_score"), a.get("classification"), a.get("country")])
+
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="report-{rid}.csv"'},
+    )
