@@ -15,7 +15,7 @@ const NAV = [
   ['docs', 'DOCS'],
 ]
 
-const AUTH_VIEWS = ['settings', 'docs']
+const AUTH_VIEWS = ['settings']
 
 export default function App() {
   const [view, setView] = useState('overview')
