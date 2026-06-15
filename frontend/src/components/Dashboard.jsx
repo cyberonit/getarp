@@ -104,35 +104,37 @@ export default function Dashboard({ onPick }) {
           </div>
         </div>
 
-        <div className="card geo">
-          <h3><span>origin · last hour</span><span>top countries</span></h3>
-          <div className="body">
-            {countries.length === 0 && <div className="muted">no enriched origins yet</div>}
-            {countries.map((c) => (
-              <div className="row" key={c.country}>
-                <span className="cc">{c.country}</span>
-                <span className="bar" style={{ width: `${(c.n / maxC) * 200}px` }} />
-                <span className="n">{c.n}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="card">
-          <h3><span>top AS</span>
-            <span>
-              {AS_WINDOWS.map(([k, label]) => (
-                <a key={k} onClick={() => setAsWindow(k)}
-                  style={{ marginLeft: 8, fontWeight: k === asWindow ? 'bold' : 'normal' }}>{label}</a>
+        <div>
+          <div className="card geo">
+            <h3><span>origin · last hour</span><span>top countries</span></h3>
+            <div className="body">
+              {countries.length === 0 && <div className="muted">no enriched origins yet</div>}
+              {countries.map((c) => (
+                <div className="row" key={c.country}>
+                  <span className="cc">{c.country}</span>
+                  <span className="bar" style={{ width: `${(c.n / maxC) * 100}px` }} />
+                  <span className="n">{c.n}</span>
+                </div>
               ))}
-            </span>
-          </h3>
-          <div className="body">
-            {topAS.length === 0 && <div className="muted">no enriched events in this window</div>}
-            <table><thead><tr><th>asn</th><th>org</th><th>events</th></tr></thead>
-              <tbody>{topAS.map((a) => (
-                <tr key={a.asn}><td>{a.asn}</td><td className="muted">{a.org || '—'}</td><td>{a.n}</td></tr>
-              ))}</tbody></table>
+            </div>
+          </div>
+
+          <div className="card" style={{ marginTop: 18 }}>
+            <h3><span>top AS</span>
+              <span>
+                {AS_WINDOWS.map(([k, label]) => (
+                  <a key={k} onClick={() => setAsWindow(k)}
+                    style={{ marginLeft: 8, fontWeight: k === asWindow ? 'bold' : 'normal' }}>{label}</a>
+                ))}
+              </span>
+            </h3>
+            <div className="body">
+              {topAS.length === 0 && <div className="muted">no enriched events in this window</div>}
+              <table><thead><tr><th>asn</th><th>org</th><th>events</th></tr></thead>
+                <tbody>{topAS.map((a) => (
+                  <tr key={a.asn}><td>{a.asn}</td><td className="muted">{a.org || '—'}</td><td>{a.n}</td></tr>
+                ))}</tbody></table>
+            </div>
           </div>
         </div>
       </div>
