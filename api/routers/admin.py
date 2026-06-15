@@ -1,11 +1,20 @@
 """Auth-gated admin endpoints: runtime settings the operator can change."""
+import os
+
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 import db
 from auth import require_admin
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+DOCS_DIR = os.environ.get("DOCS_DIR", "/app/docs")
+ALLOWED_DOCS = {
+    "hld.pdf": "High-Level Design",
+    "lld.pdf": "Low-Level Design",
+}
 
 # Keys consumed by pipeline/analytics/enrichment at startup (see their
 # settings.get(...) calls / db/init.sql defaults). Reject anything else so the
@@ -45,6 +54,26 @@ async def put_setting(s: Setting, user=Depends(require_admin)):
             s.key, s.value)  # pool codec handles JSONB encoding
     # NOTE: services read settings at startup; some changes need a service restart.
     return {"ok": True, "note": "some settings apply on next service restart"}
+
+
+@router.get("/docs")
+async def list_docs(user=Depends(require_admin)):
+    out = []
+    for name, label in ALLOWED_DOCS.items():
+        path = os.path.join(DOCS_DIR, name)
+        if os.path.isfile(path):
+            out.append({"name": name, "label": label, "size": os.path.getsize(path)})
+    return out
+
+
+@router.get("/docs/{name}")
+async def get_doc(name: str, user=Depends(require_admin)):
+    if name not in ALLOWED_DOCS:
+        raise HTTPException(404, "not found")
+    path = os.path.join(DOCS_DIR, name)
+    if not os.path.isfile(path):
+        raise HTTPException(404, "not found")
+    return FileResponse(path, media_type="application/pdf", filename=name)
 
 
 @router.get("/health")

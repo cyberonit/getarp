@@ -50,6 +50,32 @@ export function Settings() {
   )
 }
 
+export function Docs() {
+  const [rows, setRows] = useState([]); const [err, setErr] = useState('')
+  useEffect(() => { api.docs().then(setRows).catch(() => setErr('Could not load documents.')) }, [])
+  async function open(name) {
+    try {
+      const url = await api.docBlobUrl(name)
+      window.open(url, '_blank')
+    } catch { setErr('Download failed.') }
+  }
+  return (
+    <div className="card"><h3><span>documents</span><span>admin</span></h3>
+      <div className="body">
+        <p className="muted">Architecture and design documents for this deployment.</p>
+        <table><thead><tr><th>document</th><th>size</th><th></th></tr></thead>
+          <tbody>{rows.map((r) => (
+            <tr key={r.name}>
+              <td>{r.label}</td>
+              <td>{(r.size / 1024).toFixed(0)} KB</td>
+              <td><a onClick={() => open(r.name)}>open</a></td>
+            </tr>
+          ))}</tbody></table>
+        {err && <div className="err" style={{ marginTop: 10 }}>{err}</div>}
+      </div></div>
+  )
+}
+
 function SettingRow({ row, onSave }) {
   const [v, setV] = useState(JSON.stringify(row.value))
   return (

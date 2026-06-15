@@ -33,6 +33,15 @@ export const api = {
   logout() { localStorage.removeItem('getarp_token') },
   isAuthed: () => !!token(),
 
+  docs: () => get('/admin/docs'),
+  async docBlobUrl(name) {
+    const r = await fetch(BASE + `/admin/docs/${name}`, {
+      headers: { Authorization: `Bearer ${token()}` },
+    })
+    if (!r.ok) throw new Error('download failed')
+    return URL.createObjectURL(await r.blob())
+  },
+
   settings: () => get('/admin/settings'),
   async saveSetting(key, value) {
     const r = await fetch(BASE + '/admin/settings', {
