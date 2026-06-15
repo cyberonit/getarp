@@ -3,7 +3,7 @@ import { api } from './lib/api.js'
 import Dashboard from './components/Dashboard.jsx'
 import Detail from './components/Detail.jsx'
 import { Scans, Attacks, Behavior, Reports } from './components/Lists.jsx'
-import { Login, Settings } from './components/Admin.jsx'
+import { Login, Settings, Docs } from './components/Admin.jsx'
 
 const NAV = [
   ['overview', 'OVERVIEW'],
@@ -12,14 +12,17 @@ const NAV = [
   ['behavior', 'BEHAVIOR'],
   ['reports', 'REPORTS'],
   ['settings', 'SETTINGS'],
+  ['docs', 'DOCS'],
 ]
+
+const AUTH_VIEWS = ['settings', 'docs']
 
 export default function App() {
   const [view, setView] = useState('overview')
   const [pick, setPick] = useState(null)
   const [authed, setAuthed] = useState(api.isAuthed())
 
-  const needsAuth = view === 'settings'
+  const needsAuth = AUTH_VIEWS.includes(view)
   if (needsAuth && !authed) return <Login onDone={() => setAuthed(true)} />
 
   return (
@@ -30,7 +33,7 @@ export default function App() {
         {NAV.map(([k, label]) => (
           <div key={k} className={`nav-item ${view === k ? 'active' : ''}`}
             onClick={() => setView(k)}>
-            <span>{label}</span>{k === 'settings' && <span>🔒</span>}
+            <span>{label}</span>{AUTH_VIEWS.includes(k) && <span>🔒</span>}
           </div>
         ))}
         <div className="spacer" />
@@ -48,6 +51,7 @@ export default function App() {
         {view === 'behavior' && <Behavior onPick={setPick} />}
         {view === 'reports' && <Reports />}
         {view === 'settings' && <Settings />}
+        {view === 'docs' && <Docs />}
       </main>
 
       {pick && <Detail ip={pick} onClose={() => setPick(null)} />}
