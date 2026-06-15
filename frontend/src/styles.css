@@ -116,8 +116,8 @@ tr:hover td { background: rgba(255,255,255,.015); }
 .tag.bruteforcer{color:var(--warn)}
 
 /* geo bars */
-.geo .row { display:flex; align-items:center; gap:10px; margin: 7px 0; font-family:var(--mono); font-size:12px;}
-.geo .bar { height: 8px; border-radius: 4px; background: linear-gradient(90deg,var(--ours),var(--ours-dim)); }
+.geo .row { display:flex; align-items:center; gap:10px; margin: 4px 0; font-family:var(--mono); font-size:12px;}
+.geo .bar { height: 6px; border-radius: 3px; background: linear-gradient(90deg,var(--ours),var(--ours-dim)); }
 .geo .cc { width: 42px; color: var(--text-dim); }
 .geo .n { margin-left:auto; color: var(--text-dim); }
 
