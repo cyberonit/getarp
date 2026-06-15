@@ -62,11 +62,12 @@ export function Reports() {
     <div className="grid2">
       <div className="card"><h3><span>reports</span><span>{rows.length}</span></h3>
         <div className="body"><table>
-          <thead><tr><th>created</th><th>kind</th><th>events</th><th></th></tr></thead>
+          <thead><tr><th>created</th><th>kind</th><th>events</th><th></th><th></th></tr></thead>
           <tbody>{rows.map((r) => (
             <tr key={r.id}><td className="muted">{fmt(r.created_at)}</td><td>{r.kind}</td>
               <td>{r.summary?.events ?? '—'}</td>
-              <td><a onClick={() => api.report(r.id).then((d) => setHtml(d.html))}>view</a></td></tr>
+              <td><a onClick={() => api.report(r.id).then((d) => setHtml(d.html))}>view</a></td>
+              <td><a href={api.reportCsvUrl(r.id)} target="_blank" rel="noreferrer">csv</a></td></tr>
           ))}</tbody></table>
           {rows.length === 0 && <div className="muted">no reports yet — first daily report runs at 06:00 UTC</div>}
         </div></div>

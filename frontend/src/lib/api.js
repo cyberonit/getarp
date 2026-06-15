@@ -21,6 +21,7 @@ export const api = {
   map: () => get('/map'),
   reports: () => get('/reports'),
   report: (id) => get(`/reports/${id}`),
+  reportCsvUrl: (id) => `${BASE}/reports/${id}/csv`,
 
   async login(username, password) {
     const body = new URLSearchParams({ username, password })
@@ -33,14 +34,8 @@ export const api = {
   logout() { localStorage.removeItem('getarp_token') },
   isAuthed: () => !!token(),
 
-  docs: () => get('/admin/docs'),
-  async docBlobUrl(name) {
-    const r = await fetch(BASE + `/admin/docs/${name}`, {
-      headers: { Authorization: `Bearer ${token()}` },
-    })
-    if (!r.ok) throw new Error('download failed')
-    return URL.createObjectURL(await r.blob())
-  },
+  docs: () => get('/docs'),
+  docUrl: (name) => `${BASE}/docs/${name}`,
 
   settings: () => get('/admin/settings'),
   async saveSetting(key, value) {
