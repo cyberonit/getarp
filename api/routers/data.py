@@ -13,7 +13,6 @@ router = APIRouter(prefix="/api", tags=["data"])
 DOCS_DIR = os.environ.get("DOCS_DIR", "/app/docs")
 ALLOWED_DOCS = {
     "hld.pdf": "High-Level Design",
-    "lld.pdf": "Low-Level Design",
 }
 
 
