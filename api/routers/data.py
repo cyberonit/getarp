@@ -3,6 +3,7 @@ import csv
 import io
 import ipaddress
 import os
+import zipfile
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
@@ -154,78 +155,64 @@ async def report_csv(rid: int):
     summary = row["summary"] or {}
     period_from, period_to = row["period_from"], row["period_to"]
 
-    async def gen():
-        buf = io.StringIO()
-        w = csv.writer(buf)
+    # top_attackers.csv
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["report_id", row["id"]])
+    w.writerow(["created_at", row["created_at"]])
+    w.writerow(["period_from", period_from])
+    w.writerow(["period_to", period_to])
+    w.writerow([])
+    w.writerow(["src_ip", "threat_score", "classification", "country", "asn", "org"])
+    for a in summary.get("top_attackers", []):
+        w.writerow([a.get("src_ip"), a.get("threat_score"), a.get("classification"),
+                     a.get("country"), a.get("asn"), a.get("org")])
+    top_attackers_csv = buf.getvalue()
 
-        def flush():
-            data = buf.getvalue()
-            buf.seek(0)
-            buf.truncate(0)
-            return data
+    # blocked_ips.csv
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["ip", "scenario", "type", "duration", "origin"])
+    try:
+        for d in await crowdsec.local_decisions():
+            w.writerow([d.get("value"), d.get("scenario"), d.get("type"),
+                         d.get("duration"), d.get("origin")])
+    except Exception:
+        w.writerow(["(crowdsec LAPI unavailable)"])
+    blocked_ips_csv = buf.getvalue()
 
-        w.writerow(["report_id", row["id"]])
-        w.writerow(["created_at", row["created_at"]])
-        w.writerow(["kind", row["kind"]])
-        w.writerow(["period_from", period_from])
-        w.writerow(["period_to", period_to])
-        w.writerow(["events", summary.get("events")])
-        w.writerow(["unique_ips", summary.get("unique_ips")])
-        w.writerow(["scans", summary.get("scans")])
-        w.writerow([])
+    # events.csv
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["ts", "sensor", "service", "event_type", "src_ip", "src_port", "dst_port",
+                 "username", "password", "command", "signature", "severity", "session",
+                 "country", "asn", "org"])
+    async with db.pool().acquire() as con:
+        async with con.transaction():
+            cur = con.cursor(
+                """SELECT ev.ts, ev.sensor, ev.service, ev.event_type, ev.src_ip::text,
+                          ev.src_port, ev.dst_port, ev.username, ev.password, ev.command,
+                          ev.signature, ev.severity, ev.session,
+                          e.country, e.asn, e.org
+                   FROM events ev LEFT JOIN ip_enrichment e ON e.src_ip = ev.src_ip
+                   WHERE ev.ts >= $1 AND ev.ts <= $2 ORDER BY ev.ts""",
+                period_from, period_to)
+            async for r in cur:
+                w.writerow([r["ts"], r["sensor"], r["service"], r["event_type"], r["src_ip"],
+                            r["src_port"], r["dst_port"], r["username"], r["password"],
+                            r["command"], r["signature"], r["severity"], r["session"],
+                            r["country"], r["asn"], r["org"]])
+    events_csv = buf.getvalue()
 
-        w.writerow(["attacks_by_type"])
-        w.writerow(["attack_type", "count"])
-        for a in summary.get("attacks_by_type", []):
-            w.writerow([a.get("attack_type"), a.get("n")])
-        w.writerow([])
-
-        w.writerow(["top_attackers"])
-        w.writerow(["src_ip", "threat_score", "classification", "country", "asn", "org"])
-        for a in summary.get("top_attackers", []):
-            w.writerow([a.get("src_ip"), a.get("threat_score"), a.get("classification"),
-                         a.get("country"), a.get("asn"), a.get("org")])
-        w.writerow([])
-
-        w.writerow(["blocked_ips (currently active, local detections)"])
-        w.writerow(["ip", "scenario", "type", "duration", "origin"])
-        try:
-            for d in await crowdsec.local_decisions():
-                w.writerow([d.get("value"), d.get("scenario"), d.get("type"),
-                             d.get("duration"), d.get("origin")])
-        except Exception:
-            w.writerow(["(crowdsec LAPI unavailable)"])
-        w.writerow([])
-
-        w.writerow(["events"])
-        w.writerow(["ts", "sensor", "service", "event_type", "src_ip", "src_port", "dst_port",
-                     "username", "password", "command", "signature", "severity", "session",
-                     "country", "asn", "org"])
-        yield flush()
-
-        async with db.pool().acquire() as con:
-            async with con.transaction():
-                cur = con.cursor(
-                    """SELECT ev.ts, ev.sensor, ev.service, ev.event_type, ev.src_ip::text,
-                              ev.src_port, ev.dst_port, ev.username, ev.password, ev.command,
-                              ev.signature, ev.severity, ev.session,
-                              e.country, e.asn, e.org
-                       FROM events ev LEFT JOIN ip_enrichment e ON e.src_ip = ev.src_ip
-                       WHERE ev.ts >= $1 AND ev.ts <= $2 ORDER BY ev.ts""",
-                    period_from, period_to)
-                n = 0
-                async for r in cur:
-                    w.writerow([r["ts"], r["sensor"], r["service"], r["event_type"], r["src_ip"],
-                                r["src_port"], r["dst_port"], r["username"], r["password"],
-                                r["command"], r["signature"], r["severity"], r["session"],
-                                r["country"], r["asn"], r["org"]])
-                    n += 1
-                    if n % 500 == 0:
-                        yield flush()
-        yield flush()
+    zbuf = io.BytesIO()
+    with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("top_attackers.csv", top_attackers_csv)
+        zf.writestr("blocked_ips.csv", blocked_ips_csv)
+        zf.writestr("events.csv", events_csv)
+    zbuf.seek(0)
 
     return StreamingResponse(
-        gen(),
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="report-{rid}.csv"'},
+        zbuf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="report-{rid}.zip"'},
     )
