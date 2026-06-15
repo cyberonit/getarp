@@ -208,6 +208,8 @@ services:
     restart: unless-stopped
     networks: [data_net, frontend_net]
     env_file: .env
+    volumes:
+      - ./docs:/app/docs:ro
     depends_on:
       postgres:
         condition: service_healthy
