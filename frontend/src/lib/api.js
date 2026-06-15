@@ -38,9 +38,7 @@ export const api = {
   docs: () => get('/docs'),
   docUrl: (name) => `${BASE}/docs/${name}`,
 
-  crowdsecDecisions: () => get('/admin/crowdsec/decisions'),
   crowdsecOverview: () => get('/admin/crowdsec/overview'),
-  cowrieSessions: () => get('/admin/cowrie/sessions'),
 
   settings: () => get('/admin/settings'),
   async saveSetting(key, value) {
