@@ -210,6 +210,7 @@ services:
     env_file: .env
     volumes:
       - ./docs:/app/docs:ro
+      - honeypot_logs:/data/logs:ro
     depends_on:
       postgres:
         condition: service_healthy

@@ -11,7 +11,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 
 import db
 import auth
-from routers import data, admin
+from routers import data, admin, crowdsec, honeypot
 
 app = FastAPI(title="getarp Defence Intelligence API", version="0.1")
 app.add_middleware(
@@ -20,6 +20,8 @@ app.add_middleware(
     allow_methods=["*"], allow_headers=["*"])
 app.include_router(data.router)
 app.include_router(admin.router)
+app.include_router(crowdsec.router)
+app.include_router(honeypot.router)
 
 R = None
 STATUS_CHANNEL = "status:live"
