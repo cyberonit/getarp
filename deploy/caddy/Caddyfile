@@ -26,7 +26,11 @@ getarp.net, www.getarp.net {
 
 	# WebSocket + REST API -> backend
 	@api path /api/*
-	reverse_proxy @api api:8000
+	reverse_proxy @api api:8000 {
+		# overwrite (not append) so a client-supplied X-Forwarded-For can't
+		# spoof the IP used for login rate-limiting
+		header_up X-Forwarded-For {http.request.remote.host}
+	}
 
 	# Everything else -> the React dashboard
 	reverse_proxy frontend:80
