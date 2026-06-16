@@ -147,7 +147,9 @@ async def reports(limit: int = Query(30, le=100)):
 async def report_html(rid: int):
     async with db.pool().acquire() as con:
         row = await con.fetchrow("SELECT html, summary FROM reports WHERE id=$1", rid)
-    return {"html": row["html"] if row else "", "summary": row["summary"] if row else {}}
+    if not row:
+        raise HTTPException(404, "report not found")
+    return {"html": row["html"], "summary": row["summary"]}
 
 
 # Cell values starting with these characters are interpreted as formulas by
