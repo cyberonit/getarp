@@ -1,5 +1,7 @@
 """Concrete enrichment providers. Add a new one by subclassing + @register."""
 import asyncio
+import os
+import time
 import httpx
 from base import Enrichment, EnrichmentProvider, _REGISTRY, register
 
@@ -166,32 +168,80 @@ class VirusTotalProvider(EnrichmentProvider):
 
 
 @register
-class CiscoTalosProvider(EnrichmentProvider):
-    """Cisco Talos IP reputation. No API key required."""
-    name = "ciscotalos"
-    URL = "https://talosintelligence.com/sb_api/host_info"
+class AbusechProvider(EnrichmentProvider):
+    """Abuse.ch Feodo Tracker botnet C2 IP blocklist. Binary listed/not-listed only.
+
+    Fetches https://feodotracker.abuse.ch/downloads/ipblocklist.txt (plain text, one IP per
+    line) into an in-memory set; membership checks are O(1). Refreshed at most hourly in a
+    background task — never on the lookup hot-path. Falls back to the stale on-disk cache if
+    the fetch fails.
+    """
+    name = "abusech"
+    _URL = "https://feodotracker.abuse.ch/downloads/ipblocklist.txt"
+    _CACHE_PATH = os.path.join(os.path.expanduser("~"), ".cache", "feodo_ipblocklist.txt")
+    _TTL = 3600
+
+    def __init__(self, settings: dict):
+        super().__init__(settings)
+        self._blacklist: set[str] = set()
+        self._last_fetch: float = 0.0
+        self._lock = asyncio.Lock()
+        self._load_cache_sync()
+
+    def _load_cache_sync(self):
+        """Populate in-memory set from on-disk cache at startup — no network call."""
+        try:
+            if os.path.exists(self._CACHE_PATH):
+                with open(self._CACHE_PATH, encoding="utf-8") as f:
+                    self._blacklist = self._parse(f.read())
+                self._last_fetch = os.path.getmtime(self._CACHE_PATH)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _parse(text: str) -> set[str]:
+        result = set()
+        for line in text.splitlines():
+            line = line.strip()
+            if line and line[0] not in "#;":
+                result.add(line.split()[0])
+        return result
+
+    async def _refresh(self):
+        async with self._lock:
+            if time.time() - self._last_fetch < self._TTL:
+                return
+            text = None
+            for attempt in range(4):
+                try:
+                    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
+                        resp = await c.get(self._URL)
+                    if resp.status_code == 200 and resp.text.strip():
+                        text = resp.text
+                        break
+                    if resp.status_code in (429,) or resp.status_code >= 500:
+                        await asyncio.sleep(int(resp.headers.get("Retry-After", 2 ** attempt)))
+                except Exception:
+                    await asyncio.sleep(2 ** attempt)
+            if text is not None:
+                os.makedirs(os.path.dirname(self._CACHE_PATH), exist_ok=True)
+                with open(self._CACHE_PATH, "w", encoding="utf-8") as f:
+                    f.write(text)
+                self._blacklist = self._parse(text)
+            # fetch failed — keep current in-memory set (stale cache loaded at startup)
+            self._last_fetch = time.time()
 
     async def enrich(self, ip: str) -> Enrichment:
         e = Enrichment(src_ip=ip, provider=self.name)
-        try:
-            headers = {
-                "User-Agent": "Mozilla/5.0",
-                "Referer": "https://talosintelligence.com/reputation_center",
-            }
-            async with httpx.AsyncClient(timeout=10) as c:
-                resp = await c.get(self.URL, params={"url": ip}, headers=headers)
-            resp.raise_for_status()
-            d = resp.json()
-            e.raw = d
-            rep = (d.get("reputation") or d.get("web_score_name") or "").lower()
-            e.reputation = {"poor": "malicious", "untrusted": "malicious",
-                            "neutral": "unknown", "good": "clean"}.get(rep, "unknown")
-            e.is_known_attacker = rep in ("poor", "untrusted")
-            e.confidence = {"poor": 0.85, "untrusted": 0.95,
-                            "neutral": 0.3, "good": 0.0}.get(rep, 0.1)
-            e.categories = [rep] if rep else []
-        except Exception as ex:
-            e.raw = {"error": str(ex)}
+        if time.time() - self._last_fetch >= self._TTL and not self._lock.locked():
+            asyncio.create_task(self._refresh())
+        if ip in self._blacklist:
+            e.reputation = "malicious"
+            e.is_known_attacker = True
+            e.confidence = 0.9
+            e.categories = ["feodo-c2"]
+        else:
+            e.reputation = "unknown"
         return e
 
 
