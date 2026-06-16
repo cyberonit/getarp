@@ -63,7 +63,8 @@ async def main():
     await ensure_group(r)
 
     settings = await load_settings(pool)
-    provider_name = os.environ.get("ENRICHMENT_PROVIDER", "crowdsec")
+    provider_name = (settings.get("enrichment_provider", "").strip('"')
+                     or os.environ.get("ENRICHMENT_PROVIDER", "crowdsec"))
     provider = get_provider(provider_name, settings)
     print(f"[enrichment] provider = {provider.name}", flush=True)
 
