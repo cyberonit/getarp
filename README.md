@@ -93,7 +93,7 @@ docker compose up -d enrichment    # recreate to pick up .env changes
 | `abuseipdb` | Yes | Free tier: 1 000 checks/day |
 | `greynoise` | Optional | Community API works without key, limited results |
 | `virustotal` | Yes | Free tier: 500 lookups/day |
-| `ciscotalos` | No | Uses Talos reputation API; no key needed |
+| `abusech` | No | Abuse.ch Feodo Tracker botnet C2 blocklist; no key needed |
 | `multi` | — | Queries **all** providers in parallel and merges results (recommended) |
 
 **Multi-provider merge logic:** most severe reputation wins (malicious > suspicious > unknown > clean), highest confidence wins, `is_known_attacker` is true if any provider flags the IP, geo/ASN uses the first non-null value, categories are the union of all providers. Each provider's raw response is stored separately for forensics.

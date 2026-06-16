@@ -1,7 +1,7 @@
 # getarp.net — Defence Intelligence PoC: High-Level Design
 
 **Author:** Security Architecture (15y) + 2 senior engineers
-**Status:** PoC / v0.1
+**Status:** PoC / v0.4
 **Target:** Single VM, 8 vCPU / 64 GB RAM, domain `getarp.net`
 
 ---
@@ -11,7 +11,7 @@
 Stand up an internet-exposed deception sensor (Cowrie + multi-service emulator),
 capture real attacker traffic, run an IDS over it, enrich every observed IP with
 external threat intelligence from five providers (CrowdSec, AbuseIPDB, GreyNoise,
-VirusTotal, Cisco Talos) queried in parallel, correlate scans vs. attacks, profile
+VirusTotal, Abuse.ch Feodo Tracker) queried in parallel, correlate scans vs. attacks, profile
 attacker behaviour, and surface all of it through a public dashboard and an
 authenticated admin backend — all on one VM, built to be modular so components
 (intel providers, correlation engine, an AI module) can be swapped or added later.
@@ -132,7 +132,7 @@ module that wants the full command transcript).
    Redis stream `events`, and bulk-inserts into the `events` hypertable. New IPs are
    pushed to the `enrich:queue` stream.
 4. **Enrichment** consumes `enrich:queue`, fans out to all five providers in parallel
-   via `MultiProvider` (CrowdSec CTI, AbuseIPDB, GreyNoise, VirusTotal, Cisco Talos),
+   via `MultiProvider` (CrowdSec CTI, AbuseIPDB, GreyNoise, VirusTotal, Abuse.ch Feodo Tracker),
    merges results (worst reputation wins, highest confidence wins, categories union),
    and upserts `ip_enrichment`. Each provider's raw response is stored separately for
    forensics.
@@ -161,7 +161,7 @@ module that wants the full command transcript).
   | `abuseipdb` | Yes | Free tier: 1 000 checks/day |
   | `greynoise` | Optional | Community API works without a key, limited results |
   | `virustotal` | Yes | Free tier: 500 lookups/day |
-  | `ciscotalos` | No | Talos reputation feed; no key needed |
+  | `abusech` | No | Abuse.ch Feodo Tracker botnet C2 blocklist; no key needed |
   | `multi` | — | **Recommended** — queries all providers in parallel and merges results |
 
   Merge logic: most severe reputation wins (malicious > suspicious > unknown > clean),
