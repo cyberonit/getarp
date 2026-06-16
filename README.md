@@ -43,7 +43,7 @@ public dashboard with an authenticated admin backend — on a single VM.
 ## Installation
 
 ```bash
-git clone git@github.com:ostriciemata/getarp.git getarp-intel
+git clone git@github.com:cyberonit/getarp.git getarp-intel
 cd getarp-intel
 sudo bash deploy/setup.sh
 ```
