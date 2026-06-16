@@ -55,21 +55,15 @@ async def load_settings(pool) -> dict:
     return s
 
 
-async def _codecs(con):
-    for t in ("json", "jsonb"):
-        await con.set_type_codec(t, encoder=json.dumps, decoder=json.loads,
-                                 schema="pg_catalog")
-
-
 async def main():
     dsn = (f'postgresql://{os.environ["PG_USER"]}:{os.environ["PG_PASSWORD"]}'
            f'@{os.environ["PG_HOST"]}:{os.environ["PG_PORT"]}/{os.environ["PG_DB"]}')
-    pool = await asyncpg.create_pool(dsn, min_size=1, max_size=4, init=_codecs)
+    pool = await asyncpg.create_pool(dsn, min_size=1, max_size=4)
     r = redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
     await ensure_group(r)
 
     settings = await load_settings(pool)
-    provider_name = (settings.get("enrichment_provider", "")
+    provider_name = (settings.get("enrichment_provider", "").strip('"')
                      or os.environ.get("ENRICHMENT_PROVIDER", "crowdsec"))
     provider = get_provider(provider_name, settings)
     print(f"[enrichment] provider = {provider.name}", flush=True)

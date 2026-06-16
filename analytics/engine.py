@@ -246,20 +246,19 @@ class Engine:
     async def build_report(self, kind: str, span: str):
         async with self.pool.acquire() as con:
             total = await con.fetchval(
-                "SELECT count(*) FROM events WHERE ts > now()-$1::interval", span)
+                f"SELECT count(*) FROM events WHERE ts > now()-interval '{span}'")
             ips = await con.fetchval(
-                "SELECT count(DISTINCT src_ip) FROM events WHERE ts > now()-$1::interval", span)
+                f"SELECT count(DISTINCT src_ip) FROM events WHERE ts > now()-interval '{span}'")
             scans = await con.fetchval(
-                "SELECT count(*) FROM scan_events WHERE ts > now()-$1::interval", span)
+                f"SELECT count(*) FROM scan_events WHERE ts > now()-interval '{span}'")
             attacks = await con.fetch(
-                """SELECT attack_type, count(*) n FROM attack_events
-                   WHERE ts > now()-$1::interval GROUP BY attack_type ORDER BY n DESC""", span)
+                f"""SELECT attack_type, count(*) n FROM attack_events
+                    WHERE ts > now()-interval '{span}' GROUP BY attack_type ORDER BY n DESC""")
             top = await con.fetch(
-                """SELECT host(i.src_ip) AS src_ip, i.threat_score, i.classification,
-                          e.country, e.asn, e.org
-                   FROM ips i LEFT JOIN ip_enrichment e ON e.src_ip=i.src_ip
-                   WHERE i.last_seen > now()-$1::interval
-                   ORDER BY i.threat_score DESC LIMIT 20""", span)
+                f"""SELECT i.src_ip, i.threat_score, i.classification, e.country, e.asn, e.org
+                    FROM ips i LEFT JOIN ip_enrichment e ON e.src_ip=i.src_ip
+                    WHERE i.last_seen > now()-interval '{span}'
+                    ORDER BY i.threat_score DESC LIMIT 20""")
             summary = {
                 "events": total, "unique_ips": ips, "scans": scans,
                 "attacks_by_type": [dict(r) for r in attacks],
@@ -268,8 +267,9 @@ class Engine:
             html = self._render_html(kind, summary)
             await con.execute(
                 """INSERT INTO reports (period_from, period_to, kind, summary, html)
-                   VALUES (now()-$4::interval, now(), $1, $2, $3)""",
-                kind, json.dumps(summary, default=str), html, span)
+                   VALUES (now()-interval '{span}', now(), $1, $2, $3)""".replace(
+                       "{span}", span),
+                kind, json.dumps(summary, default=str), html)
         print(f"[analytics] {kind} report built", flush=True)
 
     @staticmethod
@@ -301,16 +301,10 @@ async def load_settings(pool) -> dict:
     return s
 
 
-async def _codecs(con):
-    for t in ("json", "jsonb"):
-        await con.set_type_codec(t, encoder=json.dumps, decoder=json.loads,
-                                 schema="pg_catalog")
-
-
 async def main():
     dsn = (f'postgresql://{os.environ["PG_USER"]}:{os.environ["PG_PASSWORD"]}'
            f'@{os.environ["PG_HOST"]}:{os.environ["PG_PORT"]}/{os.environ["PG_DB"]}')
-    pool = await asyncpg.create_pool(dsn, min_size=2, max_size=10, init=_codecs)
+    pool = await asyncpg.create_pool(dsn, min_size=2, max_size=10)
     r = redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
     settings = await load_settings(pool)
     eng = Engine(pool, r, settings)
