@@ -52,6 +52,7 @@ async def load_settings(pool) -> dict:
         rows = await con.fetch("SELECT key, value FROM settings")
     for row in rows:
         s[row["key"]] = row["value"]
+        s[row["key"].upper()] = row["value"]
     return s
 
 
