@@ -296,7 +296,11 @@ async def load_settings(pool) -> dict:
     s = dict(os.environ)
     async with pool.acquire() as con:
         for row in await con.fetch("SELECT key, value FROM settings"):
+            # DB keys are lowercase; store under both cases so detectors that
+            # read UPPER_CASE keys (analytics) and lowercase readers (enrichment)
+            # all pick up DB overrides instead of being shadowed by env vars.
             s[row["key"]] = row["value"]
+            s[row["key"].upper()] = row["value"]
     return s
 
 

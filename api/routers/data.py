@@ -37,7 +37,7 @@ async def get_doc(name: str):
 
 
 @router.get("/ips")
-async def list_ips(limit: int = Query(100, le=500), order: str = "threat_score"):
+async def list_ips(limit: int = Query(100, ge=1, le=500), order: str = "threat_score"):
     order_col = {"threat_score": "threat_score", "last_seen": "last_seen",
                  "event_count": "event_count"}.get(order, "threat_score")
     async with db.pool().acquire() as con:
@@ -87,7 +87,7 @@ async def ip_detail(ip: str):
 
 
 @router.get("/scans")
-async def scans(limit: int = Query(100, le=500)):
+async def scans(limit: int = Query(100, ge=1, le=500)):
     async with db.pool().acquire() as con:
         rows = await con.fetch(
             "SELECT s.id, s.ts, host(s.src_ip) AS src_ip, s.scan_type, s.port_count, s.ports, s.detail, "
@@ -98,7 +98,7 @@ async def scans(limit: int = Query(100, le=500)):
 
 
 @router.get("/attacks")
-async def attacks(limit: int = Query(100, le=500)):
+async def attacks(limit: int = Query(100, ge=1, le=500)):
     async with db.pool().acquire() as con:
         rows = await con.fetch(
             "SELECT a.id, a.ts, host(a.src_ip) AS src_ip, a.attack_type, a.service, a.severity, a.evidence, "
@@ -109,7 +109,7 @@ async def attacks(limit: int = Query(100, le=500)):
 
 
 @router.get("/behavior")
-async def behavior(limit: int = Query(100, le=500)):
+async def behavior(limit: int = Query(100, ge=1, le=500)):
     async with db.pool().acquire() as con:
         rows = await con.fetch(
             "SELECT host(b.src_ip) AS src_ip, b.sessions, b.threat_score, b.tooling_hints, b.tactics, "
@@ -135,7 +135,7 @@ async def top_as(window: str = Query("1h")):
 
 
 @router.get("/reports")
-async def reports(limit: int = Query(30, le=100)):
+async def reports(limit: int = Query(30, ge=1, le=100)):
     async with db.pool().acquire() as con:
         rows = await con.fetch(
             "SELECT id, created_at, kind, period_from, period_to, summary "
@@ -144,7 +144,7 @@ async def reports(limit: int = Query(30, le=100)):
 
 
 @router.get("/reports/{rid}")
-async def report_html(rid: int):
+async def report_html(rid: int = Query(ge=1, le=2_147_483_647)):
     async with db.pool().acquire() as con:
         row = await con.fetchrow("SELECT html, summary FROM reports WHERE id=$1", rid)
     return {"html": row["html"] if row else "", "summary": row["summary"] if row else {}}
@@ -166,7 +166,7 @@ def _csv_row(values):
 
 
 @router.get("/reports/{rid}/csv")
-async def report_csv(rid: int):
+async def report_csv(rid: int = Query(ge=1, le=2_147_483_647)):
     async with db.pool().acquire() as con:
         row = await con.fetchrow(
             "SELECT id, created_at, kind, period_from, period_to, summary FROM reports WHERE id=$1", rid)

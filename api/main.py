@@ -5,15 +5,22 @@ import json
 import os
 
 import redis.asyncio as redis
-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
+from jose import JWTError, jwt
 
 import db
 import auth
 from routers import data, admin, crowdsec, honeypot
 
-app = FastAPI(title="getarp Defence Intelligence API", version="0.1")
+app = FastAPI(
+    title="getarp Defence Intelligence API",
+    version="0.1",
+    docs_url=None,      # disable Swagger UI in production
+    redoc_url=None,     # disable ReDoc in production
+    openapi_url=None,   # disable schema endpoint in production
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://getarp.net", "https://www.getarp.net"],
@@ -85,12 +92,12 @@ async def status_now():
 
 
 @app.get("/api/status/history")
-async def status_history(hours: int = 24):
+async def status_history(hours: int = Query(24, ge=1, le=720)):
     async with db.pool().acquire() as con:
         rows = await con.fetch(
             "SELECT ts, active_attackers, events_per_min, threat_level "
-            "FROM status_snapshots WHERE ts > now()-($1||' hours')::interval "
-            "ORDER BY ts", str(hours))
+            "FROM status_snapshots WHERE ts > now() - ($1 * interval '1 hour') "
+            "ORDER BY ts", hours)
     return [dict(r) for r in rows]
 
 
@@ -109,7 +116,15 @@ async def attack_map():
 
 # ───────────────────────── WebSocket: push live events ─────────────────────────
 @app.websocket("/api/ws/status")
-async def ws_status(ws: WebSocket):
+async def ws_status(ws: WebSocket, token: str = Query(...)):
+    # Browsers can't send Authorization headers on WS connections; use query param.
+    try:
+        payload = jwt.decode(token, auth.SECRET, algorithms=[auth.ALGO])
+        if not payload.get("sub"):
+            raise ValueError
+    except (JWTError, ValueError):
+        await ws.close(code=4401)
+        return
     await ws.accept()
     pubsub = R.pubsub()
     await pubsub.subscribe(STATUS_CHANNEL)

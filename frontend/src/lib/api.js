@@ -53,7 +53,9 @@ export const api = {
 
   liveSocket(onMsg) {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const ws = new WebSocket(`${proto}://${location.host}${BASE}/ws/status`)
+    const t = token()
+    const url = `${proto}://${location.host}${BASE}/ws/status${t ? `?token=${encodeURIComponent(t)}` : ''}`
+    const ws = new WebSocket(url)
     ws.onmessage = (e) => { try { onMsg(JSON.parse(e.data)) } catch {} }
     return ws
   },
