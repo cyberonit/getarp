@@ -2,9 +2,10 @@
 import csv
 import io
 import ipaddress
+import os
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 import db
 
 router = APIRouter(prefix="/api", tags=["data"])
