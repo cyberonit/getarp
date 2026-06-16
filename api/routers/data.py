@@ -59,7 +59,7 @@ async def ip_detail(ip: str):
     async with db.pool().acquire() as con:
         info = await con.fetchrow("""
             SELECT i.*, e.country, e.asn, e.org, e.reputation, e.categories,
-                   e.is_known_attacker, e.confidence
+                   e.is_known_attacker, e.confidence, e.raw as enrichment_raw
             FROM ips i LEFT JOIN ip_enrichment e ON e.src_ip=i.src_ip
             WHERE i.src_ip=$1""", ip)
         events = await con.fetch("""
