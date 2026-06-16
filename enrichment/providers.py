@@ -169,27 +169,24 @@ class VirusTotalProvider(EnrichmentProvider):
 
 @register
 class AbusechProvider(EnrichmentProvider):
-    """Abuse.ch Feodo Tracker botnet C2 IP blocklist. Binary listed/not-listed only.
-
-    Fetches https://feodotracker.abuse.ch/downloads/ipblocklist.txt (plain text, one IP per
-    line) into an in-memory set; membership checks are O(1). Refreshed at most hourly in a
-    background task — never on the lookup hot-path. Falls back to the stale on-disk cache if
-    the fetch fails.
-    """
+    """Abuse.ch provider. Uses the Hunting API when ABUSECH_KEY is set,
+    falls back to the public Feodo Tracker IP blocklist otherwise."""
     name = "abusech"
-    _URL = "https://feodotracker.abuse.ch/downloads/ipblocklist.txt"
+    _HUNTING_URL = "https://hunting.abuse.ch/api/v1/"
+    _BLOCKLIST_URL = "https://feodotracker.abuse.ch/downloads/ipblocklist.txt"
     _CACHE_PATH = os.path.join(os.path.expanduser("~"), ".cache", "feodo_ipblocklist.txt")
     _TTL = 3600
 
     def __init__(self, settings: dict):
         super().__init__(settings)
+        self._key = settings.get("ABUSECH_KEY")
         self._blacklist: set[str] = set()
         self._last_fetch: float = 0.0
         self._lock = asyncio.Lock()
-        self._load_cache_sync()
+        if not self._key:
+            self._load_cache_sync()
 
     def _load_cache_sync(self):
-        """Populate in-memory set from on-disk cache at startup — no network call."""
         try:
             if os.path.exists(self._CACHE_PATH):
                 with open(self._CACHE_PATH, encoding="utf-8") as f:
@@ -207,7 +204,7 @@ class AbusechProvider(EnrichmentProvider):
                 result.add(line.split()[0])
         return result
 
-    async def _refresh(self):
+    async def _refresh_blocklist(self):
         async with self._lock:
             if time.time() - self._last_fetch < self._TTL:
                 return
@@ -215,7 +212,7 @@ class AbusechProvider(EnrichmentProvider):
             for attempt in range(4):
                 try:
                     async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
-                        resp = await c.get(self._URL)
+                        resp = await c.get(self._BLOCKLIST_URL)
                     if resp.status_code == 200 and resp.text.strip():
                         text = resp.text
                         break
@@ -228,13 +225,38 @@ class AbusechProvider(EnrichmentProvider):
                 with open(self._CACHE_PATH, "w", encoding="utf-8") as f:
                     f.write(text)
                 self._blacklist = self._parse(text)
-            # fetch failed — keep current in-memory set (stale cache loaded at startup)
             self._last_fetch = time.time()
 
+    async def _hunting_lookup(self, ip: str) -> Enrichment:
+        e = Enrichment(src_ip=ip, provider=self.name)
+        async with httpx.AsyncClient(timeout=30) as c:
+            resp = await c.post(self._HUNTING_URL, data={
+                "auth_key": self._key,
+                "search": ip,
+            })
+            resp.raise_for_status()
+        data = resp.json()
+        e.raw = data
+        hits = data.get("data", [])
+        if hits:
+            e.reputation = "malicious"
+            e.is_known_attacker = True
+            e.confidence = 0.9
+            tags = set()
+            for h in hits:
+                for t in h.get("tags", []):
+                    tags.add(t)
+            e.categories = sorted(tags) if tags else ["abusech-hunting"]
+        else:
+            e.reputation = "unknown"
+        return e
+
     async def enrich(self, ip: str) -> Enrichment:
+        if self._key:
+            return await self._hunting_lookup(ip)
         e = Enrichment(src_ip=ip, provider=self.name)
         if time.time() - self._last_fetch >= self._TTL and not self._lock.locked():
-            asyncio.create_task(self._refresh())
+            asyncio.create_task(self._refresh_blocklist())
         if ip in self._blacklist:
             e.reputation = "malicious"
             e.is_known_attacker = True
