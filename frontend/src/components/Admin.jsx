@@ -89,13 +89,20 @@ export function Docs() {
       <div className="body">
         <p className="muted">Architecture and design documents for this deployment.</p>
         <table><thead><tr><th>document</th><th>size</th><th></th></tr></thead>
-          <tbody>{rows.map((r) => (
-            <tr key={r.name}>
-              <td>{r.label}</td>
-              <td>{(r.size / 1024).toFixed(0)} KB</td>
-              <td><a href={api.docUrl(r.name)} target="_blank" rel="noreferrer">open</a></td>
+          <tbody>
+            <tr>
+              <td>Source repository</td>
+              <td>github.com</td>
+              <td><a href="https://github.com/cyberonit/getarp" target="_blank" rel="noreferrer">open</a></td>
             </tr>
-          ))}</tbody></table>
+            {rows.map((r) => (
+              <tr key={r.name}>
+                <td>{r.label}</td>
+                <td>{(r.size / 1024).toFixed(0)} KB</td>
+                <td><a href={api.docUrl(r.name)} target="_blank" rel="noreferrer">open</a></td>
+              </tr>
+            ))}
+          </tbody></table>
         {err && <div className="err" style={{ marginTop: 10 }}>{err}</div>}
       </div></div>
   )
