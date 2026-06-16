@@ -24,7 +24,7 @@ _INT_SETTINGS = {
 _STR_SETTINGS = {"enrichment_provider", "enabled_detectors"}
 ALLOWED_SETTINGS = _INT_SETTINGS | _STR_SETTINGS
 
-VALID_PROVIDERS = {"crowdsec", "abuseipdb", "greynoise", "virustotal", "ciscotalos", "multi"}
+VALID_PROVIDERS = {"crowdsec", "abuseipdb", "greynoise", "virustotal", "abusech", "multi"}
 
 
 class Setting(BaseModel):
