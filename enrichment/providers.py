@@ -1,6 +1,7 @@
 """Concrete enrichment providers. Add a new one by subclassing + @register."""
+import asyncio
 import httpx
-from base import Enrichment, EnrichmentProvider, register
+from base import Enrichment, EnrichmentProvider, _REGISTRY, register
 
 
 @register
@@ -173,3 +174,58 @@ class CiscoTalosProvider(EnrichmentProvider):
         except Exception as ex:
             e.raw = {"error": str(ex)}
         return e
+
+
+_REP_SEVERITY = {"malicious": 3, "suspicious": 2, "unknown": 1, "clean": 0}
+
+
+@register
+class MultiProvider(EnrichmentProvider):
+    """Queries all other registered providers in parallel and merges results.
+    Set ENRICHMENT_PROVIDER=multi to activate."""
+    name = "multi"
+
+    def _sub_providers(self):
+        return [cls(self.settings) for name, cls in _REGISTRY.items()
+                if name != self.name]
+
+    async def enrich(self, ip: str) -> Enrichment:
+        providers = self._sub_providers()
+        results = await asyncio.gather(
+            *[p.enrich(ip) for p in providers], return_exceptions=True)
+
+        merged = Enrichment(src_ip=ip, provider=self.name)
+        merged.raw = {}
+
+        for p, result in zip(providers, results):
+            if isinstance(result, Exception):
+                merged.raw[p.name] = {"error": str(result)}
+                continue
+            merged.raw[p.name] = result.raw
+
+            # most severe reputation wins
+            if _REP_SEVERITY.get(result.reputation, 0) > _REP_SEVERITY.get(merged.reputation, 0):
+                merged.reputation = result.reputation
+
+            # highest confidence wins
+            if result.confidence > merged.confidence:
+                merged.confidence = result.confidence
+
+            # any provider flagging as attacker is enough
+            if result.is_known_attacker:
+                merged.is_known_attacker = True
+
+            # first non-null geo/ASN wins
+            if not merged.country and result.country:
+                merged.country = result.country
+            if not merged.asn and result.asn:
+                merged.asn = result.asn
+            if not merged.org and result.org:
+                merged.org = result.org
+
+            # union of all categories
+            for cat in result.categories:
+                if cat and cat not in merged.categories:
+                    merged.categories.append(cat)
+
+        return merged
