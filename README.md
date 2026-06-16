@@ -83,10 +83,18 @@ To change it at runtime:
 
 ```bash
 # edit .env
-ENRICHMENT_PROVIDER=abuseipdb      # crowdsec | abuseipdb | greynoise
-ABUSEIPDB_KEY=<your-key>
+ENRICHMENT_PROVIDER=virustotal     # crowdsec | abuseipdb | greynoise | virustotal | ciscotalos
+VIRUSTOTAL_KEY=<your-key>
 docker compose restart enrichment
 ```
+
+| Provider | API key required | Notes |
+|---|---|---|
+| `crowdsec` | Optional (CTI key) | Default; falls back to local LAPI decisions without key |
+| `abuseipdb` | Yes | Free tier: 1 000 checks/day |
+| `greynoise` | Optional | Community API works without key, limited results |
+| `virustotal` | Yes | Free tier: 500 lookups/day |
+| `ciscotalos` | No | Uses Talos reputation API; no key needed |
 
 Add a custom provider by subclassing `EnrichmentProvider` in `enrichment/providers.py`
 and decorating it with `@register` — nothing else changes.
