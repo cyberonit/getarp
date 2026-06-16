@@ -2,14 +2,10 @@
 import csv
 import io
 import ipaddress
-import os
-import tempfile
-import zipfile
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 import db
-from routers import crowdsec
 
 router = APIRouter(prefix="/api", tags=["data"])
 
@@ -169,70 +165,21 @@ async def report_csv(rid: int):
     if not row:
         raise HTTPException(404, "not found")
     summary = row["summary"] or {}
-    period_from, period_to = row["period_from"], row["period_to"]
 
-    # top_attackers.csv
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["report_id", row["id"]])
     w.writerow(["created_at", row["created_at"]])
-    w.writerow(["period_from", period_from])
-    w.writerow(["period_to", period_to])
+    w.writerow(["period_from", row["period_from"]])
+    w.writerow(["period_to", row["period_to"]])
     w.writerow([])
     w.writerow(["src_ip", "threat_score", "classification", "country", "asn", "org"])
     for a in summary.get("top_attackers", []):
         w.writerow(_csv_row([a.get("src_ip"), a.get("threat_score"), a.get("classification"),
                               a.get("country"), a.get("asn"), a.get("org")]))
-    top_attackers_csv = buf.getvalue()
-
-    # blocked_ips.csv
-    buf = io.StringIO()
-    w = csv.writer(buf)
-    w.writerow(["ip", "scenario", "type", "duration", "origin"])
-    try:
-        for d in await crowdsec.local_decisions():
-            w.writerow(_csv_row([d.get("value"), d.get("scenario"), d.get("type"),
-                                  d.get("duration"), d.get("origin")]))
-    except Exception:
-        w.writerow(["(crowdsec LAPI unavailable)"])
-    blocked_ips_csv = buf.getvalue()
-
-    # events.csv - written to a temp file while streaming from the DB cursor,
-    # so a large report doesn't hold the whole CSV in memory at once.
-    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline="")
-    try:
-        w = csv.writer(tmp)
-        w.writerow(["ts", "sensor", "service", "event_type", "src_ip", "src_port", "dst_port",
-                     "username", "password", "command", "signature", "severity", "session",
-                     "country", "asn", "org"])
-        async with db.pool().acquire() as con:
-            async with con.transaction():
-                cur = con.cursor(
-                    """SELECT ev.ts, ev.sensor, ev.service, ev.event_type, ev.src_ip::text,
-                              ev.src_port, ev.dst_port, ev.username, ev.password, ev.command,
-                              ev.signature, ev.severity, ev.session,
-                              e.country, e.asn, e.org
-                       FROM events ev LEFT JOIN ip_enrichment e ON e.src_ip = ev.src_ip
-                       WHERE ev.ts >= $1 AND ev.ts <= $2 ORDER BY ev.ts""",
-                    period_from, period_to)
-                async for r in cur:
-                    w.writerow(_csv_row([r["ts"], r["sensor"], r["service"], r["event_type"], r["src_ip"],
-                                          r["src_port"], r["dst_port"], r["username"], r["password"],
-                                          r["command"], r["signature"], r["severity"], r["session"],
-                                          r["country"], r["asn"], r["org"]]))
-        tmp.close()
-
-        zbuf = io.BytesIO()
-        with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("top_attackers.csv", top_attackers_csv)
-            zf.writestr("blocked_ips.csv", blocked_ips_csv)
-            zf.write(tmp.name, "events.csv")
-        zbuf.seek(0)
-    finally:
-        os.unlink(tmp.name)
 
     return StreamingResponse(
-        zbuf,
-        media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="report-{rid}.zip"'},
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="report-{rid}.csv"'},
     )

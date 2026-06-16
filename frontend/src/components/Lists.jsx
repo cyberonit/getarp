@@ -70,7 +70,7 @@ export function Reports() {
             <tr key={r.id}><td className="muted">{fmt(r.created_at)}</td><td>{r.kind}</td>
               <td>{r.summary?.events ?? '—'}</td>
               <td><a onClick={() => api.report(r.id).then((d) => setHtml(d.html))}>view</a></td>
-              <td><a href={api.reportZipUrl(r.id)} target="_blank" rel="noreferrer">export (zip)</a></td></tr>
+              <td><a href={api.reportCsvUrl(r.id)} target="_blank" rel="noreferrer">export (csv)</a></td></tr>
           ))}</tbody></table>
           {rows.length === 0 && <div className="muted">no reports yet — first daily report runs at 06:00 UTC</div>}
         </div></div>

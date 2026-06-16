@@ -22,7 +22,7 @@ export const api = {
   topAS: (window = '1h') => get(`/top-as?window=${window}`),
   reports: () => get('/reports'),
   report: (id) => get(`/reports/${id}`),
-  reportZipUrl: (id) => `${BASE}/reports/${id}/csv`,
+  reportCsvUrl: (id) => `${BASE}/reports/${id}/csv`,
 
   async login(username, password) {
     const body = new URLSearchParams({ username, password })
