@@ -24,6 +24,7 @@ CREATE TABLE events (
     PRIMARY KEY (ts, event_id)
 );
 SELECT create_hypertable('events', 'ts', chunk_time_interval => INTERVAL '1 day');
+CREATE INDEX idx_events_ts       ON events (ts DESC);
 CREATE INDEX idx_events_src_ip   ON events (src_ip, ts DESC);
 CREATE INDEX idx_events_service  ON events (service, ts DESC);
 CREATE INDEX idx_events_type     ON events (event_type, ts DESC);
@@ -150,6 +151,14 @@ ON CONFLICT DO NOTHING;
 -- ─────────────── retention (tune for your legal/PII requirements) ───────────────
 SELECT add_retention_policy('events', INTERVAL '90 days');
 SELECT add_retention_policy('status_snapshots', INTERVAL '180 days');
+
+-- compress chunks older than 7 days (events are read-mostly past that point)
+ALTER TABLE events SET (
+    timescaledb.compress,
+    timescaledb.compress_segmentby = 'src_ip',
+    timescaledb.compress_orderby = 'ts DESC'
+);
+SELECT add_compression_policy('events', INTERVAL '7 days');
 
 -- continuous aggregate powering fast dashboard counters
 CREATE MATERIALIZED VIEW events_5m
