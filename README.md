@@ -79,13 +79,12 @@ make enroll T=<console-token>     # token from https://app.crowdsec.net
 ## Swapping the intelligence provider
 
 The enrichment provider is set during `setup.sh` based on which API key you supply.
-To change it at runtime:
+To change it at runtime via the admin Settings tab, or by editing `.env`:
 
 ```bash
-# edit .env
-ENRICHMENT_PROVIDER=virustotal     # crowdsec | abuseipdb | greynoise | virustotal | ciscotalos
+ENRICHMENT_PROVIDER=multi          # recommended: queries all providers in parallel
 VIRUSTOTAL_KEY=<your-key>
-docker compose restart enrichment
+docker compose up -d enrichment    # recreate to pick up .env changes
 ```
 
 | Provider | API key required | Notes |
@@ -95,6 +94,9 @@ docker compose restart enrichment
 | `greynoise` | Optional | Community API works without key, limited results |
 | `virustotal` | Yes | Free tier: 500 lookups/day |
 | `ciscotalos` | No | Uses Talos reputation API; no key needed |
+| `multi` | — | Queries **all** providers in parallel and merges results (recommended) |
+
+**Multi-provider merge logic:** most severe reputation wins (malicious > suspicious > unknown > clean), highest confidence wins, `is_known_attacker` is true if any provider flags the IP, geo/ASN uses the first non-null value, categories are the union of all providers. Each provider's raw response is stored separately for forensics.
 
 Add a custom provider by subclassing `EnrichmentProvider` in `enrichment/providers.py`
 and decorating it with `@register` — nothing else changes.
