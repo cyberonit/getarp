@@ -168,11 +168,27 @@ async def report_csv(rid: int):
 
     buf = io.StringIO()
     w = csv.writer(buf)
+
+    # Executive summary
+    w.writerow(["EXECUTIVE SUMMARY"])
     w.writerow(["report_id", row["id"]])
+    w.writerow(["kind", row["kind"]])
     w.writerow(["created_at", row["created_at"]])
     w.writerow(["period_from", row["period_from"]])
     w.writerow(["period_to", row["period_to"]])
     w.writerow([])
+    w.writerow(["total_events", summary.get("events", "")])
+    w.writerow(["unique_ips", summary.get("unique_ips", "")])
+    w.writerow(["scans", summary.get("scans", "")])
+    w.writerow([])
+    w.writerow(["ATTACKS BY TYPE"])
+    w.writerow(["attack_type", "count"])
+    for a in summary.get("attacks_by_type", []):
+        w.writerow([a.get("attack_type"), a.get("n")])
+    w.writerow([])
+
+    # Top attackers
+    w.writerow(["TOP ATTACKERS"])
     w.writerow(["src_ip", "threat_score", "classification", "country", "asn", "org"])
     for a in summary.get("top_attackers", []):
         w.writerow(_csv_row([a.get("src_ip"), a.get("threat_score"), a.get("classification"),
