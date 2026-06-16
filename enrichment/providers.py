@@ -105,3 +105,71 @@ class GreyNoiseProvider(EnrichmentProvider):
         except Exception as ex:
             e.raw = {"error": str(ex)}
         return e
+
+
+@register
+class VirusTotalProvider(EnrichmentProvider):
+    """VirusTotal IP reputation via the v3 API. Requires a free API key."""
+    name = "virustotal"
+    URL = "https://www.virustotal.com/api/v3/ip_addresses/"
+
+    async def enrich(self, ip: str) -> Enrichment:
+        e = Enrichment(src_ip=ip, provider=self.name)
+        key = self.settings.get("VIRUSTOTAL_KEY")
+        if not key:
+            e.categories = ["api-key-missing"]
+            return e
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                resp = await c.get(self.URL + ip, headers={"x-apikey": key})
+            if resp.status_code == 404:
+                e.reputation = "clean"
+                return e
+            resp.raise_for_status()
+            attrs = resp.json().get("data", {}).get("attributes", {})
+            e.raw = attrs
+            stats = attrs.get("last_analysis_stats", {})
+            malicious = stats.get("malicious", 0)
+            suspicious = stats.get("suspicious", 0)
+            total = sum(stats.values()) or 1
+            e.confidence = malicious / total
+            e.country = attrs.get("country")
+            e.asn = str(attrs.get("asn", "") or "")
+            e.org = attrs.get("as_owner")
+            e.is_known_attacker = malicious >= 5
+            e.reputation = ("malicious" if malicious >= 5 else
+                            "suspicious" if malicious >= 1 or suspicious >= 3 else "clean")
+            e.categories = attrs.get("tags", [])
+        except Exception as ex:
+            e.raw = {"error": str(ex)}
+        return e
+
+
+@register
+class CiscoTalosProvider(EnrichmentProvider):
+    """Cisco Talos IP reputation. No API key required."""
+    name = "ciscotalos"
+    URL = "https://talosintelligence.com/sb_api/host_info"
+
+    async def enrich(self, ip: str) -> Enrichment:
+        e = Enrichment(src_ip=ip, provider=self.name)
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://talosintelligence.com/reputation_center",
+            }
+            async with httpx.AsyncClient(timeout=10) as c:
+                resp = await c.get(self.URL, params={"url": ip}, headers=headers)
+            resp.raise_for_status()
+            d = resp.json()
+            e.raw = d
+            rep = (d.get("reputation") or d.get("web_score_name") or "").lower()
+            e.reputation = {"poor": "malicious", "untrusted": "malicious",
+                            "neutral": "unknown", "good": "clean"}.get(rep, "unknown")
+            e.is_known_attacker = rep in ("poor", "untrusted")
+            e.confidence = {"poor": 0.85, "untrusted": 0.95,
+                            "neutral": 0.3, "good": 0.0}.get(rep, 0.1)
+            e.categories = [rep] if rep else []
+        except Exception as ex:
+            e.raw = {"error": str(ex)}
+        return e
