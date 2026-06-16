@@ -99,6 +99,7 @@ CREATE TABLE behavior_profiles (
     updated_at      TIMESTAMPTZ DEFAULT now(),
     detail          JSONB
 );
+CREATE INDEX idx_behavior_threat_score ON behavior_profiles (threat_score DESC);
 
 -- 5-minute live status snapshots
 CREATE TABLE status_snapshots (
