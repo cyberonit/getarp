@@ -42,9 +42,28 @@ class CrowdSecProvider(EnrichmentProvider):
         return e
 
     async def _local(self, ip: str, e: Enrichment) -> Enrichment:
-        url = self.settings.get("CROWDSEC_LAPI_URL", "")
+        """Fall back to querying the local LAPI decisions when no CTI key is available."""
+        url = self.settings.get("CROWDSEC_LAPI_URL", "http://crowdsec:8080")
+        key = self.settings.get("CROWDSEC_BOUNCER_KEY", "")
         e.reputation = "unknown"
         e.categories = ["cti-key-missing"]
+        if not key:
+            return e
+        try:
+            async with httpx.AsyncClient(timeout=5) as c:
+                resp = await c.get(f"{url}/v1/decisions",
+                                   headers={"X-Api-Key": key},
+                                   params={"ip": ip})
+            if resp.status_code == 200:
+                decisions = resp.json() or []
+                if decisions:
+                    e.reputation = "malicious"
+                    e.is_known_attacker = True
+                    e.confidence = 0.9
+                    e.categories = list({d.get("scenario", "")
+                                         for d in decisions if d.get("scenario")})
+        except Exception as ex:
+            e.raw = {"error": str(ex)}
         return e
 
 
@@ -185,12 +204,15 @@ class MultiProvider(EnrichmentProvider):
     Set ENRICHMENT_PROVIDER=multi to activate."""
     name = "multi"
 
-    def _sub_providers(self):
-        return [cls(self.settings) for name, cls in _REGISTRY.items()
-                if name != self.name]
+    def __init__(self, settings: dict):
+        super().__init__(settings)
+        # Cache provider instances at init time — _REGISTRY is fully populated by
+        # the time this runs (all classes in this module are already decorated).
+        self._providers = [cls(settings) for name, cls in _REGISTRY.items()
+                           if name != self.name]
 
     async def enrich(self, ip: str) -> Enrichment:
-        providers = self._sub_providers()
+        providers = self._providers
         results = await asyncio.gather(
             *[p.enrich(ip) for p in providers], return_exceptions=True)
 

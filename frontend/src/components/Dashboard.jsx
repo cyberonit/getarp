@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 
 const scoreClass = (s) => s >= 70 ? 's-hi' : s >= 35 ? 's-mid' : 's-lo'
@@ -36,7 +36,10 @@ export default function Dashboard({ onPick }) {
   const level = status.threat_level || 'low'
   const countries = status.top_countries || []
   const maxC = Math.max(1, ...countries.map((c) => c.n))
-  const ipInfo = Object.fromEntries(ips.map((ip) => [ip.src_ip, ip]))
+  const ipInfo = useMemo(
+    () => Object.fromEntries(ips.map((ip) => [ip.src_ip, ip])),
+    [ips]
+  )
 
   return (
     <>

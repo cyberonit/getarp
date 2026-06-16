@@ -39,7 +39,9 @@ class AttackDetector(Detector):
                 ))
 
         # 2) post-auth command execution (attacker got "in" and ran commands)
-        if et == "command" and event.get("command"):
+        # Deduplicated per IP per window — one finding per window, not per command,
+        # to avoid flooding attack_events with hundreds of rows per session.
+        if et == "command" and event.get("command") and not self._dup(ip, "exec", now):
             findings.append(Finding(
                 kind="attack", src_ip=ip, attack_type="post_auth_exec",
                 service=event.get("service"), severity=3,

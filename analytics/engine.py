@@ -246,19 +246,19 @@ class Engine:
     async def build_report(self, kind: str, span: str):
         async with self.pool.acquire() as con:
             total = await con.fetchval(
-                f"SELECT count(*) FROM events WHERE ts > now()-interval '{span}'")
+                "SELECT count(*) FROM events WHERE ts > now()-$1::interval", span)
             ips = await con.fetchval(
-                f"SELECT count(DISTINCT src_ip) FROM events WHERE ts > now()-interval '{span}'")
+                "SELECT count(DISTINCT src_ip) FROM events WHERE ts > now()-$1::interval", span)
             scans = await con.fetchval(
-                f"SELECT count(*) FROM scan_events WHERE ts > now()-interval '{span}'")
+                "SELECT count(*) FROM scan_events WHERE ts > now()-$1::interval", span)
             attacks = await con.fetch(
-                f"""SELECT attack_type, count(*) n FROM attack_events
-                    WHERE ts > now()-interval '{span}' GROUP BY attack_type ORDER BY n DESC""")
+                "SELECT attack_type, count(*) n FROM attack_events "
+                "WHERE ts > now()-$1::interval GROUP BY attack_type ORDER BY n DESC", span)
             top = await con.fetch(
-                f"""SELECT i.src_ip, i.threat_score, i.classification, e.country, e.asn, e.org
-                    FROM ips i LEFT JOIN ip_enrichment e ON e.src_ip=i.src_ip
-                    WHERE i.last_seen > now()-interval '{span}'
-                    ORDER BY i.threat_score DESC LIMIT 20""")
+                "SELECT i.src_ip, i.threat_score, i.classification, e.country, e.asn, e.org "
+                "FROM ips i LEFT JOIN ip_enrichment e ON e.src_ip=i.src_ip "
+                "WHERE i.last_seen > now()-$1::interval "
+                "ORDER BY i.threat_score DESC LIMIT 20", span)
             summary = {
                 "events": total, "unique_ips": ips, "scans": scans,
                 "attacks_by_type": [dict(r) for r in attacks],
@@ -266,10 +266,9 @@ class Engine:
             }
             html = self._render_html(kind, summary)
             await con.execute(
-                """INSERT INTO reports (period_from, period_to, kind, summary, html)
-                   VALUES (now()-interval '{span}', now(), $1, $2, $3)""".replace(
-                       "{span}", span),
-                kind, json.dumps(summary, default=str), html)
+                "INSERT INTO reports (period_from, period_to, kind, summary, html) "
+                "VALUES (now()-$1::interval, now(), $2, $3, $4)",
+                span, kind, json.dumps(summary, default=str), html)
         print(f"[analytics] {kind} report built", flush=True)
 
     @staticmethod

@@ -1,4 +1,5 @@
 """Read-only viewer for the Cowrie honeypot's session log."""
+import asyncio
 import json
 import os
 
@@ -39,7 +40,7 @@ def _tail_events():
 @router.get("/sessions")
 async def sessions(limit: int = Query(50, le=200), user=Depends(require_admin)):
     sessions = {}
-    for e in _tail_events():
+    for e in await asyncio.to_thread(_tail_events):
         sid = e.get("session")
         if not sid:
             continue
