@@ -76,7 +76,7 @@ async def status_now():
         live_attackers = await con.fetchval(
             "SELECT count(DISTINCT src_ip) FROM events WHERE ts>now()-interval '5 min'")
         recent_attacks = await con.fetch(
-            "SELECT ts, src_ip::text, attack_type, service FROM attack_events "
+            "SELECT ts, host(src_ip) AS src_ip, attack_type, service FROM attack_events "
             "ORDER BY ts DESC LIMIT 10")
     out = dict(snap) if snap else {}
     out["live_attackers"] = live_attackers or 0
@@ -99,7 +99,7 @@ async def attack_map():
     """Points for the world map: one per enriched attacking IP with a country."""
     async with db.pool().acquire() as con:
         rows = await con.fetch("""
-            SELECT i.src_ip::text, i.threat_score, i.classification,
+            SELECT host(i.src_ip) AS src_ip, i.threat_score, i.classification,
                    e.country, e.org
             FROM ips i JOIN ip_enrichment e ON e.src_ip=i.src_ip
             WHERE e.country IS NOT NULL AND i.last_seen > now()-interval '24 hours'

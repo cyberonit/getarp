@@ -10,10 +10,11 @@
 
 Stand up an internet-exposed deception sensor (Cowrie + multi-service emulator),
 capture real attacker traffic, run an IDS over it, enrich every observed IP with
-external threat intelligence (CrowdSec, swappable), correlate scans vs. attacks,
-profile attacker behaviour, and surface all of it through a public dashboard and an
+external threat intelligence from five providers (CrowdSec, AbuseIPDB, GreyNoise,
+VirusTotal, Cisco Talos) queried in parallel, correlate scans vs. attacks, profile
+attacker behaviour, and surface all of it through a public dashboard and an
 authenticated admin backend — all on one VM, built to be modular so components
-(intel provider, correlation engine, an AI module) can be swapped or added later.
+(intel providers, correlation engine, an AI module) can be swapped or added later.
 
 ## 2. The one principle that drives the whole design
 
@@ -54,8 +55,8 @@ network path from a popped honeypot into your intelligence database.
    │  │        │                     │              │                   │ │
    │  │        │              ┌──────┴──────┐  ┌────┴─────────┐         │ │
    │  │        │              │ Enrichment  │  │  Analytics    │        │ │
-   │  │        │              │ (CrowdSec / │  │ correlation + │        │ │
-   │  │        │              │  AbuseIPDB) │  │ behavioral +  │        │ │
+   │  │        │              │ MultiProvider│  │ correlation + │        │ │
+   │  │        │              │ (5 sources) │  │ behavioral +  │        │ │
    │  │        │              └─────────────┘  │ 5-min status  │        │ │
    │  │        │                               │ + reports     │        │ │
    │  │  CrowdSec LAPI ◄── parses cowrie/eve   └───────────────┘        │ │
@@ -88,7 +89,7 @@ shared log volume.
 | Bus/Cache | Redis | `redis:7` | Event stream + pub/sub for live status |
 | Storage | PostgreSQL + TimescaleDB | `timescale/timescaledb` | Events, sessions, IPs, enrichment, correlations, reports, users |
 | Ingest | Pipeline | Python | Tails sensor logs → normalize → Redis stream + Postgres |
-| Intel | Enrichment | Python | Per-IP enrichment behind a provider interface (swappable) |
+| Intel | Enrichment — MultiProvider | Python | Queries all 5 providers in parallel; merges by worst reputation; stores each provider's raw response |
 | Analytics | Analytics | Python | Pluggable correlation (scan/attack), behavioral profiling, 5-min status, reports |
 | API | Backend | FastAPI | Auth, settings, data endpoints, WebSocket live feed |
 | UI | Frontend | React + Vite | Dashboard, attacker map, correlation/behavior views, reports, settings |
@@ -130,8 +131,11 @@ module that wants the full command transcript).
 3. **Pipeline** tails those files, normalizes to the canonical schema, `XADD`s to the
    Redis stream `events`, and bulk-inserts into the `events` hypertable. New IPs are
    pushed to the `enrich:queue` stream.
-4. **Enrichment** consumes `enrich:queue`, calls the active provider (CrowdSec CTI by
-   default), upserts `ip_enrichment`.
+4. **Enrichment** consumes `enrich:queue`, fans out to all five providers in parallel
+   via `MultiProvider` (CrowdSec CTI, AbuseIPDB, GreyNoise, VirusTotal, Cisco Talos),
+   merges results (worst reputation wins, highest confidence wins, categories union),
+   and upserts `ip_enrichment`. Each provider's raw response is stored separately for
+   forensics.
 5. **Analytics** consumes the `events` stream:
    - `ScanDetector` flags an IP touching ≥N distinct ports in a window → `scan_events`.
    - `AttackDetector` flags brute force / post-auth commands / IDS exploit sigs → `attack_events`.
@@ -148,9 +152,23 @@ module that wants the full command transcript).
 
 ## 7. Modularity / extension points (explicitly requested)
 
-- **Swap the intel provider:** implement `EnrichmentProvider.enrich(ip)` in
-  `enrichment/`, register it, flip `ENRICHMENT_PROVIDER` in `.env`. CrowdSec, AbuseIPDB,
-  GreyNoise stubs included.
+- **Intel providers — five built in, easily extended:** the system ships with five
+  providers behind a common `EnrichmentProvider` interface:
+
+  | Provider | Key required | Notes |
+  |---|---|---|
+  | `crowdsec` | Optional (CTI key) | Default single-provider mode; falls back to local LAPI decisions |
+  | `abuseipdb` | Yes | Free tier: 1 000 checks/day |
+  | `greynoise` | Optional | Community API works without a key, limited results |
+  | `virustotal` | Yes | Free tier: 500 lookups/day |
+  | `ciscotalos` | No | Talos reputation feed; no key needed |
+  | `multi` | — | **Recommended** — queries all providers in parallel and merges results |
+
+  Merge logic: most severe reputation wins (malicious > suspicious > unknown > clean),
+  highest confidence score wins, `is_known_attacker` is true if any provider flags the
+  IP, geo/ASN uses the first non-null value, categories are the union of all providers.
+  To add a custom provider: subclass `EnrichmentProvider` in `enrichment/providers.py`,
+  decorate with `@register`, flip `ENRICHMENT_PROVIDER=multi` in `.env`.
 - **Add a correlation/behavioral module:** subclass `Detector` in
   `analytics/correlation/` (or a profiler in `analytics/behavioral/`), drop it in the
   registry. Engine auto-loads enabled detectors from config.
