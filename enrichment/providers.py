@@ -198,7 +198,7 @@ class AbusechProvider(EnrichmentProvider):
     name = "abusech"
     _THREATFOX_URL = "https://threatfox-api.abuse.ch/api/v1/"
     _BLOCKLIST_URL = "https://feodotracker.abuse.ch/downloads/ipblocklist.txt"
-    _CACHE_PATH = os.path.join(os.path.expanduser("~"), ".cache", "feodo_ipblocklist.txt")
+    _CACHE_PATH = os.path.join("/tmp", "feodo_ipblocklist.txt")
     _TTL = 3600
 
     def __init__(self, settings: dict):
@@ -331,7 +331,9 @@ class MultiProvider(EnrichmentProvider):
             if isinstance(result, Exception):
                 merged.raw[p.name] = {"error": str(result)}
                 continue
-            merged.raw[p.name] = result.raw
+            praw = dict(result.raw) if isinstance(result.raw, dict) else {}
+            praw["reputation"] = result.reputation
+            merged.raw[p.name] = praw
 
             if _REP_SEVERITY.get(result.reputation, 0) > _REP_SEVERITY.get(merged.reputation, 0):
                 merged.reputation = result.reputation

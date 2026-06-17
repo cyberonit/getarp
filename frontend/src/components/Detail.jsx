@@ -3,6 +3,18 @@ import { api } from '../lib/api.js'
 
 const REP_COLOR = { malicious: '#f87171', suspicious: '#fb923c', clean: '#4ade80', unknown: '#6b7280' }
 
+function deriveRep(data) {
+  if (typeof data.reputation === 'string' && REP_COLOR[data.reputation]) return data.reputation
+  if (data.classification && REP_COLOR[data.classification]) return data.classification
+  const score = data.abuseConfidenceScore
+  if (score !== undefined) return score >= 75 ? 'malicious' : score >= 25 ? 'suspicious' : 'clean'
+  const stats = data.last_analysis_stats
+  if (stats) return stats.malicious >= 5 ? 'malicious' : stats.malicious >= 1 ? 'suspicious' : 'clean'
+  if (data.banned === true) return 'malicious'
+  if (data.banned === false) return 'unknown'
+  return '—'
+}
+
 function IntelSources({ raw }) {
   if (!raw || typeof raw !== 'object') return null
   const providers = Object.entries(raw).filter(([, v]) => v && !v.error)
@@ -14,7 +26,7 @@ function IntelSources({ raw }) {
         INTEL SOURCES</h3>
       <table><tbody>
         {providers.map(([name, data]) => {
-          const rep = data.reputation || data.web_score_name || data.classification || '—'
+          const rep = deriveRep(data)
           const score = data.abuseConfidenceScore ?? data.last_analysis_stats?.malicious ?? null
           const scoreLabel = score !== null ? ` · ${score}${data.abuseConfidenceScore !== undefined ? '%' : ' detections'}` : ''
           const org = data.as_owner || data.isp || data.name || ''
