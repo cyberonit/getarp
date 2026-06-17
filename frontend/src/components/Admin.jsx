@@ -48,8 +48,69 @@ export function Settings() {
             ))}</tbody></table>
           {msg && <div className="muted" style={{ marginTop: 10 }}>{msg}</div>}
         </div></div>
+      <LiveTraffic />
+      <BlockedIPs />
       <CrowdSecConsole />
     </>
+  )
+}
+
+function LiveTraffic() {
+  const [events, setEvents] = useState([])
+  const [limit, setLimit] = useState(20)
+  const [err, setErr] = useState('')
+  const load = () => api.latestEvents(limit).then(setEvents).catch(() => setErr('Could not load events.'))
+  useEffect(load, [limit])
+  return (
+    <div className="card"><h3><span>live honeypot traffic</span>
+      <span>
+        {[20, 50].map((n) => (
+          <a key={n} onClick={() => setLimit(n)}
+            style={{ marginLeft: 8, fontWeight: n === limit ? 'bold' : 'normal' }}>{n}</a>
+        ))}
+        <a onClick={load} style={{ marginLeft: 12 }}>refresh</a>
+      </span>
+    </h3>
+      <div className="body" style={{ maxHeight: 420, overflowY: 'auto' }}>
+        <table><thead><tr><th>time</th><th>src_ip</th><th>service</th><th>type</th><th>port</th><th>user</th><th>command / signature</th></tr></thead>
+          <tbody>{events.map((e, i) => (
+            <tr key={i}>
+              <td className="muted">{new Date(e.ts).toLocaleTimeString()}</td>
+              <td>{e.src_ip}</td>
+              <td>{e.service || '—'}</td>
+              <td className="muted">{e.event_type}</td>
+              <td>{e.dst_port ?? '—'}</td>
+              <td className="muted">{e.username || '—'}</td>
+              <td className="muted">{e.command || e.signature || '—'}</td>
+            </tr>
+          ))}</tbody></table>
+        {events.length === 0 && <div className="muted">no events yet</div>}
+        {err && <div className="err" style={{ marginTop: 10 }}>{err}</div>}
+      </div></div>
+  )
+}
+
+function BlockedIPs() {
+  const [rows, setRows] = useState([])
+  const [err, setErr] = useState('')
+  const load = () => api.crowdsecDecisions().then(setRows).catch(() => setErr('Could not reach CrowdSec LAPI.'))
+  useEffect(load, [])
+  return (
+    <div className="card"><h3><span>blocked IPs (nftables)</span><span>{rows.length} active bans</span></h3>
+      <div className="body" style={{ maxHeight: 420, overflowY: 'auto' }}>
+        <p className="muted">IPs currently banned by the CrowdSec firewall bouncer.</p>
+        <table><thead><tr><th>IP</th><th>scenario</th><th>type</th><th>duration</th></tr></thead>
+          <tbody>{rows.map((d) => (
+            <tr key={d.id}>
+              <td>{d.ip}</td>
+              <td className="muted">{d.scenario || '—'}</td>
+              <td>{d.type || '—'}</td>
+              <td className="muted">{d.duration || '—'}</td>
+            </tr>
+          ))}</tbody></table>
+        {rows.length === 0 && !err && <div className="muted">no active bans</div>}
+        {err && <div className="err" style={{ marginTop: 10 }}>{err}</div>}
+      </div></div>
   )
 }
 
