@@ -127,10 +127,11 @@ async def top_as(window: str = Query("1h")):
         raise HTTPException(400, "invalid window")
     async with db.pool().acquire() as con:
         rows = await con.fetch(
-            "SELECT e.asn, e.org, count(*) n "
-            "FROM events ev JOIN ip_enrichment e ON e.src_ip = ev.src_ip "
-            "WHERE ev.ts > now() - $1::interval AND e.asn IS NOT NULL "
-            "GROUP BY e.asn, e.org ORDER BY n DESC LIMIT 10", span)
+            f"SELECT e.asn, e.org, count(*) n "
+            f"FROM events ev JOIN ip_enrichment e ON e.src_ip = ev.src_ip "
+            f"WHERE ev.ts > now() - interval '{span}' AND e.asn IS NOT NULL "
+            f"AND e.asn != '' "
+            f"GROUP BY e.asn, e.org ORDER BY n DESC LIMIT 10")
     return [dict(r) for r in rows]
 
 
