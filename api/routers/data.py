@@ -129,6 +129,22 @@ async def behavior(limit: int = Query(100, ge=1, le=500)):
     return [dict(r) for r in rows]
 
 
+@router.get("/top-countries")
+async def top_countries(window: str = Query("1h")):
+    spans = {"1h": "1 hour", "24h": "24 hours", "7d": "7 days", "30d": "30 days"}
+    span = spans.get(window)
+    if not span:
+        raise HTTPException(400, "invalid window")
+    async with db.pool().acquire() as con:
+        rows = await con.fetch(
+            f"SELECT e.country, count(*) n "
+            f"FROM events ev JOIN ip_enrichment e ON e.src_ip = ev.src_ip "
+            f"WHERE ev.ts > now() - interval '{span}' AND e.country IS NOT NULL "
+            f"AND e.country != '' "
+            f"GROUP BY e.country ORDER BY n DESC LIMIT 10")
+    return [dict(r) for r in rows]
+
+
 @router.get("/top-as")
 async def top_as(window: str = Query("1h")):
     spans = {"1h": "1 hour", "24h": "24 hours", "7d": "7 days", "30d": "30 days"}
