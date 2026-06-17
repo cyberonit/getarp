@@ -169,10 +169,10 @@ class VirusTotalProvider(EnrichmentProvider):
 
 @register
 class AbusechProvider(EnrichmentProvider):
-    """Abuse.ch provider. Uses the ThreatFox API when ABUSECH_KEY is set,
+    """Abuse.ch provider. Uses the Hunting API when ABUSECH_KEY is set,
     falls back to the public Feodo Tracker IP blocklist otherwise."""
     name = "abusech"
-    _THREATFOX_URL = "https://threatfox-api.abuse.ch/api/v1/"
+    _HUNTING_URL = "https://hunting-api.abuse.ch/api/v1/"
     _BLOCKLIST_URL = "https://feodotracker.abuse.ch/downloads/ipblocklist.txt"
     _CACHE_PATH = os.path.join(os.path.expanduser("~"), ".cache", "feodo_ipblocklist.txt")
     _TTL = 3600
@@ -227,34 +227,34 @@ class AbusechProvider(EnrichmentProvider):
                 self._blacklist = self._parse(text)
             self._last_fetch = time.time()
 
-    async def _threatfox_lookup(self, ip: str) -> Enrichment:
+    async def _hunting_lookup(self, ip: str) -> Enrichment:
         e = Enrichment(src_ip=ip, provider=self.name)
         async with httpx.AsyncClient(timeout=30) as c:
             resp = await c.post(
-                self._THREATFOX_URL,
+                self._HUNTING_URL,
                 headers={"Auth-Key": self._key},
-                json={"query": "search_ioc", "search_term": ip, "exact_match": True},
+                json={"query": "search", "search": ip},
             )
             resp.raise_for_status()
         data = resp.json()
         e.raw = data
-        hits = data.get("data") if isinstance(data.get("data"), list) else []
+        hits = data.get("data", [])
         if hits:
             e.reputation = "malicious"
             e.is_known_attacker = True
             e.confidence = 0.9
             tags = set()
             for h in hits:
-                for t in h.get("tags", []) or []:
+                for t in h.get("tags", []):
                     tags.add(t)
-            e.categories = sorted(tags) if tags else ["abusech-threatfox"]
+            e.categories = sorted(tags) if tags else ["abusech-hunting"]
         else:
             e.reputation = "unknown"
         return e
 
     async def enrich(self, ip: str) -> Enrichment:
         if self._key:
-            return await self._threatfox_lookup(ip)
+            return await self._hunting_lookup(ip)
         e = Enrichment(src_ip=ip, provider=self.name)
         if time.time() - self._last_fetch >= self._TTL and not self._lock.locked():
             asyncio.create_task(self._refresh_blocklist())
