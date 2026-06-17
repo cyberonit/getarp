@@ -4,7 +4,7 @@ import io
 import ipaddress
 import os
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Path, Query
 from fastapi.responses import FileResponse, StreamingResponse
 import db
 
@@ -144,7 +144,7 @@ async def reports(limit: int = Query(30, ge=1, le=100)):
 
 
 @router.get("/reports/{rid}")
-async def report_html(rid: int = Query(ge=1, le=2_147_483_647)):
+async def report_html(rid: int = Path(ge=1, le=2_147_483_647)):
     async with db.pool().acquire() as con:
         row = await con.fetchrow("SELECT html, summary FROM reports WHERE id=$1", rid)
     return {"html": row["html"] if row else "", "summary": row["summary"] if row else {}}
@@ -166,7 +166,7 @@ def _csv_row(values):
 
 
 @router.get("/reports/{rid}/csv")
-async def report_csv(rid: int = Query(ge=1, le=2_147_483_647)):
+async def report_csv(rid: int = Path(ge=1, le=2_147_483_647)):
     async with db.pool().acquire() as con:
         row = await con.fetchrow(
             "SELECT id, created_at, kind, period_from, period_to, summary FROM reports WHERE id=$1", rid)
@@ -188,6 +188,7 @@ async def report_csv(rid: int = Query(ge=1, le=2_147_483_647)):
     w.writerow(["total_events", summary.get("events", "")])
     w.writerow(["unique_ips", summary.get("unique_ips", "")])
     w.writerow(["scans", summary.get("scans", "")])
+    w.writerow(["blocked_ips", summary.get("blocked_ips", "")])
     w.writerow([])
     w.writerow(["ATTACKS BY TYPE"])
     w.writerow(["attack_type", "count"])
