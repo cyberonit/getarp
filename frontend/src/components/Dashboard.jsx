@@ -11,6 +11,8 @@ export default function Dashboard({ onPick }) {
   const [feed, setFeed] = useState([])
   const [topAS, setTopAS] = useState([])
   const [asWindow, setAsWindow] = useState('1h')
+  const [countries, setCountries] = useState([])
+  const [cWindow, setCWindow] = useState('1h')
   const wsRef = useRef(null)
 
   async function refresh() {
@@ -33,8 +35,11 @@ export default function Dashboard({ onPick }) {
     api.topAS(asWindow).then(setTopAS).catch(() => setTopAS([]))
   }, [asWindow])
 
+  useEffect(() => {
+    api.topCountries(cWindow).then(setCountries).catch(() => setCountries([]))
+  }, [cWindow])
+
   const level = status.threat_level || 'low'
-  const countries = status.top_countries || []
   const maxC = Math.max(1, ...countries.map((c) => c.n))
   const ipInfo = useMemo(
     () => Object.fromEntries(ips.map((ip) => [ip.src_ip, ip])),
@@ -109,7 +114,14 @@ export default function Dashboard({ onPick }) {
 
         <div>
           <div className="card geo">
-            <h3><span>origin · last hour</span><span>top countries</span></h3>
+            <h3><span>top countries</span>
+              <span>
+                {AS_WINDOWS.map(([k, label]) => (
+                  <a key={k} onClick={() => setCWindow(k)}
+                    style={{ marginLeft: 8, fontWeight: k === cWindow ? 'bold' : 'normal' }}>{label}</a>
+                ))}
+              </span>
+            </h3>
             <div className="body">
               {countries.length === 0 && <div className="muted">no enriched origins yet</div>}
               {countries.map((c) => (
