@@ -34,7 +34,8 @@ app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://getarp.net", "https://www.getarp.net"],
-    allow_methods=["*"], allow_headers=["*"])
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"])
 app.include_router(data.router)
 app.include_router(admin.router)
 app.include_router(crowdsec.router)
@@ -58,6 +59,7 @@ LOGIN_WINDOW_SECONDS = 900  # 15 min
 
 
 @app.post("/api/auth/login")
+@limiter.limit("10/minute")
 async def login(request: Request, form: OAuth2PasswordRequestForm = Depends()):
     ip = (request.headers.get("x-forwarded-for") or
           (request.client.host if request.client else "unknown")).split(",")[0].strip()
@@ -85,7 +87,8 @@ async def me(user=Depends(auth.current_user)):
 
 # ───────────────────────── live status (the "every 5 min" view) ─────────────────────────
 @app.get("/api/status")
-async def status_now():
+@limiter.limit("60/minute")
+async def status_now(request: Request):
     """Latest snapshot (5-min cadence) + a fast live counter for the header."""
     async with db.pool().acquire() as con:
         snap = await con.fetchrow(
@@ -102,7 +105,8 @@ async def status_now():
 
 
 @app.get("/api/status/history")
-async def status_history(hours: int = Query(24, ge=1, le=720)):
+@limiter.limit("60/minute")
+async def status_history(request: Request, hours: int = Query(24, ge=1, le=720)):
     async with db.pool().acquire() as con:
         rows = await con.fetch(
             "SELECT ts, active_attackers, events_per_min, threat_level "
@@ -112,7 +116,8 @@ async def status_history(hours: int = Query(24, ge=1, le=720)):
 
 
 @app.get("/api/map")
-async def attack_map():
+@limiter.limit("60/minute")
+async def attack_map(request: Request):
     """Points for the world map: one per enriched attacking IP with a country."""
     async with db.pool().acquire() as con:
         rows = await con.fetch("""
@@ -154,5 +159,6 @@ async def ws_status(ws: WebSocket, token: str = Query(...)):
 
 
 @app.get("/api/health")
-async def health():
+@limiter.limit("60/minute")
+async def health(request: Request):
     return {"status": "ok"}

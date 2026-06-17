@@ -70,7 +70,7 @@ class Engine:
                 for f in await det.on_event(ip, ev, list(win)):
                     await self.persist_finding(f)
             except Exception as e:
-                print(f"[analytics] detector {det.key}: {e}", flush=True)
+                print(f"[analytics] detector {det.key}: {str(e).replace(chr(10), ' ').replace(chr(13), '')}", flush=True)
 
         # behavioral profile
         prof = self.profiler.update(self.profiles[ip], ev)

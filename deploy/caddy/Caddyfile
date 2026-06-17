@@ -33,5 +33,5 @@ getarp.net, www.getarp.net {
 	}
 
 	# Everything else -> the React dashboard
-	reverse_proxy frontend:80
+	reverse_proxy frontend:8080
 }
