@@ -38,7 +38,6 @@ public dashboard with an authenticated admin backend — on a single VM.
 | 3306 | Honeypot fake MySQL |
 | 6379 | Honeypot fake Redis |
 | 443 | Dashboard TLS + ACME |
-| `MGMT_PORT` | Your real SSH (pick one, e.g. 2022) |
 
 ## Installation
 
@@ -52,7 +51,7 @@ sudo bash deploy/setup.sh
 
 1. Ask for your domain, public NIC, management SSH port, DB credentials, admin credentials, and optional CTI API keys.
 2. Auto-generate a `JWT_SECRET` and write `.env` (mode 600).
-3. Move `sshd` off port 22 to your chosen `MGMT_PORT` (Cowrie needs port 22) — **you will be prompted to confirm SSH still works before it continues**.
+3. Move `sshd` off port 22 (Cowrie needs it) — **you will be prompted to confirm SSH still works before it continues**.
 4. Install Docker (if not present).
 5. Configure UFW with a default-deny policy, opening only the ports listed above.
 6. Install `crowdsec-firewall-bouncer-nftables` as a host systemd service (no Docker image exists for it).
@@ -65,7 +64,7 @@ When it finishes you'll see:
 ```
   Dashboard  : https://<your-domain>
   Admin login: <admin-user>  (password as entered)
-  SSH (admin): ssh -p <MGMT_PORT> <user>@<vm-ip>
+  SSH (admin): ssh -p <port> <user>@<vm-ip>
 ```
 
 ## Post-install (optional)
