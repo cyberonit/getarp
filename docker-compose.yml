@@ -34,7 +34,7 @@ volumes:
 services:
   # ───────────────────────── DECEPTION (isolated) ─────────────────────────
   cowrie:
-    image: cowrie/cowrie:latest
+    image: cowrie/cowrie:latest      # no versioned tags available upstream
     restart: unless-stopped
     networks: [honeypot_net]
     ports:
@@ -74,7 +74,7 @@ services:
 
   # ───────────────────────────── DETECTION ────────────────────────────────
   suricata:
-    image: jasonish/suricata:latest
+    image: jasonish/suricata:7.0
     restart: unless-stopped
     network_mode: host        # needs to see the real public NIC via AF_PACKET
     cap_add: [NET_ADMIN, NET_RAW, SYS_NICE]
@@ -93,7 +93,7 @@ services:
   # ──────────────────── INTEL + ENFORCEMENT (CrowdSec) ────────────────────
   # CrowdSec LAPI — detection engine + community CTI sync (needs egress_net for CAPI)
   crowdsec:
-    image: crowdsecurity/crowdsec:latest
+    image: crowdsecurity/crowdsec:v1.6
     restart: unless-stopped
     networks: [data_net, egress_net]    # data_net: talks to nothing on internet;
                                         # egress_net: pulls collections + syncs CAPI
@@ -121,17 +121,23 @@ services:
 
   # ──────────────────────────── BUS + STORAGE ─────────────────────────────
   redis:
-    image: redis:7-alpine
+    image: redis:7.2-alpine
     restart: unless-stopped
     networks: [data_net]
-    command: redis-server --save "" --maxmemory 768mb --maxmemory-policy noeviction
+    command: redis-server --save "" --requirepass ${REDIS_PASSWORD} --maxmemory 768mb --maxmemory-policy noeviction
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
     deploy:
       resources:
         limits: { cpus: "0.25", memory: 1G }
     logging: *default-logging
 
   postgres:
-    image: timescale/timescaledb:latest-pg16
+    image: timescale/timescaledb:2.17.2-pg16
     restart: unless-stopped
     networks: [data_net]
     environment:
@@ -157,14 +163,20 @@ services:
     build: ./pipeline
     restart: unless-stopped
     networks: [data_net]
-    env_file: .env
+    environment:
+      PG_HOST: postgres
+      PG_PORT: "5432"
+      PG_DB: ${PG_DB}
+      PG_USER: ${PG_USER}
+      PG_PASSWORD: ${PG_PASSWORD}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
     volumes:
       - honeypot_logs:/data/logs:ro      # READ-ONLY: one-way telemetry crossing the boundary
     depends_on:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
     deploy:
       resources:
         limits: { cpus: "0.5", memory: 1G }
@@ -174,12 +186,26 @@ services:
     build: ./enrichment
     restart: unless-stopped
     networks: [data_net, egress_net]    # data_net: Redis/Postgres; egress_net: CTI APIs
-    env_file: .env
+    environment:
+      PG_HOST: postgres
+      PG_PORT: "5432"
+      PG_DB: ${PG_DB}
+      PG_USER: ${PG_USER}
+      PG_PASSWORD: ${PG_PASSWORD}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      ENRICHMENT_PROVIDER: ${ENRICHMENT_PROVIDER}
+      CROWDSEC_LAPI_URL: http://crowdsec:8080
+      CROWDSEC_BOUNCER_KEY: ${CROWDSEC_BOUNCER_KEY}
+      CROWDSEC_CTI_KEY: ${CROWDSEC_CTI_KEY:-}
+      ABUSEIPDB_KEY: ${ABUSEIPDB_KEY:-}
+      ABUSECH_KEY: ${ABUSECH_KEY:-}
+      GREYNOISE_KEY: ${GREYNOISE_KEY:-}
+      VIRUSTOTAL_KEY: ${VIRUSTOTAL_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       crowdsec:
         condition: service_started
     deploy:
@@ -191,12 +217,24 @@ services:
     build: ./analytics
     restart: unless-stopped
     networks: [data_net]
-    env_file: .env
+    environment:
+      PG_HOST: postgres
+      PG_PORT: "5432"
+      PG_DB: ${PG_DB}
+      PG_USER: ${PG_USER}
+      PG_PASSWORD: ${PG_PASSWORD}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      ENABLED_DETECTORS: ${ENABLED_DETECTORS:-scan,attack}
+      ENABLED_PROFILERS: ${ENABLED_PROFILERS:-default}
+      STATUS_INTERVAL_SECONDS: ${STATUS_INTERVAL_SECONDS:-300}
+      REPORT_CRON_HOUR: ${REPORT_CRON_HOUR:-6}
+      CROWDSEC_LAPI_URL: http://crowdsec:8080
+      CROWDSEC_BOUNCER_KEY: ${CROWDSEC_BOUNCER_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
     deploy:
       resources:
         limits: { cpus: "1", memory: 2G }
@@ -207,7 +245,19 @@ services:
     build: ./api
     restart: unless-stopped
     networks: [data_net, frontend_net]
-    env_file: .env
+    environment:
+      PG_HOST: postgres
+      PG_PORT: "5432"
+      PG_DB: ${PG_DB}
+      PG_USER: ${PG_USER}
+      PG_PASSWORD: ${PG_PASSWORD}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-60}
+      ADMIN_USER: ${ADMIN_USER}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      CROWDSEC_LAPI_URL: http://crowdsec:8080
+      CROWDSEC_BOUNCER_KEY: ${CROWDSEC_BOUNCER_KEY}
     volumes:
       - ./docs:/app/docs:ro
       - honeypot_logs:/data/logs:ro
@@ -215,7 +265,7 @@ services:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
     deploy:
       resources:
         limits: { cpus: "0.5", memory: 1G }
@@ -231,9 +281,11 @@ services:
     logging: *default-logging
 
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2.8-alpine
     restart: unless-stopped
     networks: [frontend_net]
+    environment:
+      ADMIN_IP: ${ADMIN_IP}
     ports:
       - "443:443"
       - "8443:80"           # port 80 is taken by the honeypot; ACME via TLS-ALPN on 443

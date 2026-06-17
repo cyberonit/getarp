@@ -15,12 +15,18 @@ async def _codecs(con):
 
 async def init_pool():
     global _pool
-    dsn = (f'postgresql://{os.environ["PG_USER"]}:{os.environ["PG_PASSWORD"]}'
-           f'@{os.environ["PG_HOST"]}:{os.environ["PG_PORT"]}/{os.environ["PG_DB"]}')
-    _pool = await asyncpg.create_pool(dsn, min_size=2, max_size=10, init=_codecs)
+    _pool = await asyncpg.create_pool(
+        host=os.environ["PG_HOST"],
+        port=int(os.environ["PG_PORT"]),
+        database=os.environ["PG_DB"],
+        user=os.environ["PG_USER"],
+        password=os.environ["PG_PASSWORD"],
+        min_size=2, max_size=10, init=_codecs,
+    )
     return _pool
 
 
 def pool() -> asyncpg.Pool:
-    assert _pool is not None, "pool not initialised"
+    if _pool is None:
+        raise RuntimeError("pool not initialised")
     return _pool
