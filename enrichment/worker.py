@@ -5,6 +5,7 @@ calls the active provider, and upserts ip_enrichment. Provider is chosen at runt
 from settings -> fully swappable without touching anything else.
 """
 import asyncio
+import ipaddress
 import json
 import os
 
@@ -83,6 +84,8 @@ async def main():
             for msg_id, fields in messages:
                 ip = fields.get("src_ip")
                 try:
+                    if ip:
+                        ipaddress.ip_address(ip)
                     if ip and not await r.get(f"enr:seen:{ip}"):
                         enr = await provider.enrich(ip)
                         await upsert(pool, enr)
@@ -94,7 +97,9 @@ async def main():
                                     "WHERE src_ip=$1", ip, 60.0)
                         await r.set(f"enr:seen:{ip}", "1", ex=CACHE_TTL)
                 except Exception as ex:
-                    print(f"[enrichment] {ip}: {ex}", flush=True)
+                    safe_ip = str(ip).replace("\n", "").replace("\r", "")
+                    safe_err = str(ex).replace("\n", " ").replace("\r", "")
+                    print(f"[enrichment] {safe_ip}: {safe_err}", flush=True)
                 finally:
                     await r.xack(ENRICH_STREAM, GROUP, msg_id)
 

@@ -78,6 +78,7 @@ services:
     restart: unless-stopped
     network_mode: host        # needs to see the real public NIC via AF_PACKET
     cap_add: [NET_ADMIN, NET_RAW, SYS_NICE]
+    security_opt: ["no-new-privileges:true"]
     command: -i ${PUBLIC_IFACE} --set sensor-name=getarp
     volumes:
       # not :ro — the official entrypoint chowns these to the suricata user on
@@ -163,6 +164,8 @@ services:
     build: ./pipeline
     restart: unless-stopped
     networks: [data_net]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     environment:
       PG_HOST: postgres
       PG_PORT: "5432"
@@ -186,6 +189,8 @@ services:
     build: ./enrichment
     restart: unless-stopped
     networks: [data_net, egress_net]    # data_net: Redis/Postgres; egress_net: CTI APIs
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     environment:
       PG_HOST: postgres
       PG_PORT: "5432"
@@ -217,6 +222,8 @@ services:
     build: ./analytics
     restart: unless-stopped
     networks: [data_net]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     environment:
       PG_HOST: postgres
       PG_PORT: "5432"
@@ -245,6 +252,8 @@ services:
     build: ./api
     restart: unless-stopped
     networks: [data_net, frontend_net]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     environment:
       PG_HOST: postgres
       PG_PORT: "5432"
@@ -278,12 +287,23 @@ services:
         VITE_API_BASE: /api
     restart: unless-stopped
     networks: [frontend_net]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 256M }
     logging: *default-logging
 
   caddy:
     image: caddy:2.8-alpine
     restart: unless-stopped
     networks: [frontend_net]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 2G }
     environment:
       ADMIN_IP: ${ADMIN_IP}
     ports:

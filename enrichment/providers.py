@@ -47,7 +47,7 @@ class CrowdSecProvider(EnrichmentProvider):
         if not self._key:
             e.categories = ["bouncer-key-missing"]
             return e
-        if time.time() - self._last_fetch >= self._TTL and not self._lock.locked():
+        if time.time() - self._last_fetch >= self._TTL:
             await self._refresh()
         scenarios = self._decisions.get(ip)
         if scenarios:
@@ -100,12 +100,21 @@ class GreyNoiseProvider(EnrichmentProvider):
     URL = "https://api.greynoise.io/v3/community/"
     _COOLDOWN = 60
 
+    _MAX_CACHE = 10000
+
     def __init__(self, settings: dict):
         super().__init__(settings)
         self._cache: dict[str, Enrichment] = {}
         self._cache_ts: dict[str, float] = {}
         self._cache_ttl = 3600
         self._rate_limited_until: float = 0.0
+
+    def _cache_put(self, ip: str, e: Enrichment):
+        if len(self._cache) >= self._MAX_CACHE:
+            oldest = min(self._cache_ts, key=self._cache_ts.get)
+            del self._cache[oldest], self._cache_ts[oldest]
+        self._cache[ip] = e
+        self._cache_ts[ip] = time.time()
 
     async def enrich(self, ip: str) -> Enrichment:
         now = time.time()
@@ -134,8 +143,7 @@ class GreyNoiseProvider(EnrichmentProvider):
                 return e
             if resp.status_code == 404:
                 e.reputation = "clean"
-                self._cache[ip] = e
-                self._cache_ts[ip] = now
+                self._cache_put(ip, e)
                 return e
             resp.raise_for_status()
             d = resp.json()
@@ -148,8 +156,7 @@ class GreyNoiseProvider(EnrichmentProvider):
             e.confidence = 0.8 if cls == "malicious" else 0.3
         except Exception as ex:
             e.raw = {"error": str(ex)}
-        self._cache[ip] = e
-        self._cache_ts[ip] = now
+        self._cache_put(ip, e)
         return e
 
 
@@ -254,8 +261,8 @@ class AbusechProvider(EnrichmentProvider):
     async def _threatfox_lookup(self, ip: str) -> Enrichment:
         e = Enrichment(src_ip=ip, provider=self.name)
         # always check blocklist first
-        if time.time() - self._last_fetch >= self._TTL and not self._lock.locked():
-            asyncio.create_task(self._refresh_blocklist())
+        if time.time() - self._last_fetch >= self._TTL:
+            await self._refresh_blocklist()
         if ip in self._blacklist:
             e.reputation = "malicious"
             e.is_known_attacker = True
@@ -293,8 +300,8 @@ class AbusechProvider(EnrichmentProvider):
         if self._key:
             return await self._threatfox_lookup(ip)
         e = Enrichment(src_ip=ip, provider=self.name)
-        if time.time() - self._last_fetch >= self._TTL and not self._lock.locked():
-            asyncio.create_task(self._refresh_blocklist())
+        if time.time() - self._last_fetch >= self._TTL:
+            await self._refresh_blocklist()
         if ip in self._blacklist:
             e.reputation = "malicious"
             e.is_known_attacker = True

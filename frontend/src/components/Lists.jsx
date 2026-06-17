@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import DOMPurify from 'dompurify'
 import { api } from '../lib/api.js'
 
 const fmt = (t) => new Date(t).toLocaleString()
@@ -76,7 +77,7 @@ export function Reports() {
         </div></div>
       <div className="card"><h3><span>preview</span></h3>
         <div className="body" style={{ background: '#fff', borderRadius: 8, minHeight: 200 }}
-          dangerouslySetInnerHTML={{ __html: html || '<p style="color:#888;font-family:monospace;padding:12px">select a report</p>' }} />
+          dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(html || '<p style="color:#888;font-family:monospace;padding:12px">select a report</p>') }} />
       </div>
     </div>
   )

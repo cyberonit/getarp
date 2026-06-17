@@ -12,6 +12,7 @@ This is the ONE place that knows each sensor's native format. Add a sensor by ad
 a normalizer; nothing downstream changes.
 """
 import asyncio
+import ipaddress
 import json
 import os
 import uuid
@@ -160,6 +161,10 @@ async def consumer(queue: asyncio.Queue, pool, r):
         e = NORMALIZERS[sensor](record)
         if not e:
             continue
+        try:
+            ipaddress.ip_address(e["src_ip"])
+        except (ValueError, TypeError):
+            continue
         ts = _parse_ts(e["ts"])
         try:
             async with pool.acquire() as con:
@@ -176,7 +181,7 @@ async def consumer(queue: asyncio.Queue, pool, r):
                 )
                 is_new = await _upsert_ip(con, e)
         except Exception as ex:
-            print(f"[pipeline] db error: {ex}", flush=True)
+            print(f"[pipeline] db error: {str(ex).replace(chr(10), ' ').replace(chr(13), '')}", flush=True)
             continue
         # publish to the bus
         payload = {k: ("" if v is None else str(v)) for k, v in e.items() if k != "raw"}

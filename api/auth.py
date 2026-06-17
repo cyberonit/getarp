@@ -37,10 +37,16 @@ async def seed_admin():
         exists = await con.fetchval("SELECT 1 FROM users LIMIT 1")
         if exists:
             return
+        password = os.environ.get("ADMIN_PASSWORD")
+        if not password or password == "admin":
+            raise RuntimeError(
+                "ADMIN_PASSWORD must be set to a non-default value. "
+                "Refusing to start with insecure credentials."
+            )
         await con.execute(
             "INSERT INTO users (username, password_hash, role) VALUES ($1,$2,'admin')",
             os.environ.get("ADMIN_USER", "admin"),
-            hash_pw(os.environ.get("ADMIN_PASSWORD", "admin")),
+            hash_pw(password),
         )
 
 
@@ -60,9 +66,15 @@ async def current_user(token: str = Depends(oauth2)) -> dict:
         payload = jwt.decode(token, SECRET, algorithms=[ALGO])
     except InvalidTokenError:
         raise cred_err
-    if not payload.get("sub"):
+    username = payload.get("sub")
+    if not username:
         raise cred_err
-    return {"username": payload["sub"], "role": payload.get("role")}
+    async with db.pool().acquire() as con:
+        row = await con.fetchrow(
+            "SELECT username, role FROM users WHERE username=$1", username)
+    if not row:
+        raise cred_err
+    return {"username": row["username"], "role": row["role"]}
 
 
 async def require_admin(user: dict = Depends(current_user)) -> dict:
