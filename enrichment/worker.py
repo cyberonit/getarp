@@ -57,9 +57,14 @@ async def load_settings(pool) -> dict:
 
 
 async def main():
-    dsn = (f'postgresql://{os.environ["PG_USER"]}:{os.environ["PG_PASSWORD"]}'
-           f'@{os.environ["PG_HOST"]}:{os.environ["PG_PORT"]}/{os.environ["PG_DB"]}')
-    pool = await asyncpg.create_pool(dsn, min_size=1, max_size=4)
+    pool = await asyncpg.create_pool(
+        host=os.environ["PG_HOST"],
+        port=int(os.environ["PG_PORT"]),
+        database=os.environ["PG_DB"],
+        user=os.environ["PG_USER"],
+        password=os.environ["PG_PASSWORD"],
+        min_size=1, max_size=4,
+    )
     r = redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
     await ensure_group(r)
 

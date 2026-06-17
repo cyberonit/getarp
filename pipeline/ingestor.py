@@ -128,26 +128,29 @@ async def tail(path: str, queue: asyncio.Queue, sensor: str):
         await asyncio.sleep(2)
     inode = os.stat(path).st_ino
     fh = open(path, "r")
-    fh.seek(0, os.SEEK_END)  # start at tail; we want live traffic
-    while True:
-        line = fh.readline()
-        if line:
-            line = line.strip()
+    try:
+        fh.seek(0, os.SEEK_END)  # start at tail; we want live traffic
+        while True:
+            line = fh.readline()
             if line:
-                try:
-                    await queue.put((sensor, json.loads(line)))
-                except json.JSONDecodeError:
-                    pass
-            continue
-        await asyncio.sleep(0.4)
-        # detect rotation
-        try:
-            if os.stat(path).st_ino != inode:
-                fh.close()
-                fh = open(path, "r")
-                inode = os.fstat(fh.fileno()).st_ino
-        except FileNotFoundError:
-            await asyncio.sleep(1)
+                line = line.strip()
+                if line:
+                    try:
+                        await queue.put((sensor, json.loads(line)))
+                    except json.JSONDecodeError:
+                        pass
+                continue
+            await asyncio.sleep(0.4)
+            # detect rotation
+            try:
+                if os.stat(path).st_ino != inode:
+                    fh.close()
+                    fh = open(path, "r")
+                    inode = os.fstat(fh.fileno()).st_ino
+            except FileNotFoundError:
+                await asyncio.sleep(1)
+    finally:
+        fh.close()
 
 
 # ───────────────────────── writers ─────────────────────────
@@ -210,9 +213,14 @@ def _parse_ts(s):
 
 
 async def main():
-    dsn = (f'postgresql://{os.environ["PG_USER"]}:{os.environ["PG_PASSWORD"]}'
-           f'@{os.environ["PG_HOST"]}:{os.environ["PG_PORT"]}/{os.environ["PG_DB"]}')
-    pool = await asyncpg.create_pool(dsn, min_size=2, max_size=8)
+    pool = await asyncpg.create_pool(
+        host=os.environ["PG_HOST"],
+        port=int(os.environ["PG_PORT"]),
+        database=os.environ["PG_DB"],
+        user=os.environ["PG_USER"],
+        password=os.environ["PG_PASSWORD"],
+        min_size=2, max_size=8,
+    )
     r = redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
     queue: asyncio.Queue = asyncio.Queue(maxsize=10000)
     tasks = [asyncio.create_task(tail(os.path.join(LOG_DIR, f), queue, s))

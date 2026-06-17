@@ -5,7 +5,8 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import InvalidTokenError
 from passlib.context import CryptContext
 
 import db
@@ -57,7 +58,7 @@ async def current_user(token: str = Depends(oauth2)) -> dict:
                             headers={"WWW-Authenticate": "Bearer"})
     try:
         payload = jwt.decode(token, SECRET, algorithms=[ALGO])
-    except JWTError:
+    except InvalidTokenError:
         raise cred_err
     if not payload.get("sub"):
         raise cred_err

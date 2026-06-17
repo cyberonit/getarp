@@ -3,16 +3,24 @@
 import asyncio
 import json
 import os
+import time
 
 import redis.asyncio as redis
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import InvalidTokenError
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 import db
 import auth
 from routers import data, admin, crowdsec, honeypot
+
+limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
 
 app = FastAPI(
     title="getarp Defence Intelligence API",
@@ -21,6 +29,8 @@ app = FastAPI(
     redoc_url=None,     # disable ReDoc in production
     openapi_url=None,   # disable schema endpoint in production
 )
+app.state.limiter = limiter
+app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://getarp.net", "https://www.getarp.net"],
@@ -122,14 +132,18 @@ async def ws_status(ws: WebSocket, token: str = Query(...)):
         payload = jwt.decode(token, auth.SECRET, algorithms=[auth.ALGO])
         if not payload.get("sub"):
             raise ValueError
-    except (JWTError, ValueError):
+    except (InvalidTokenError, ValueError):
         await ws.close(code=4401)
         return
+    exp = payload.get("exp", 0)
     await ws.accept()
     pubsub = R.pubsub()
     await pubsub.subscribe(STATUS_CHANNEL)
     try:
         async for msg in pubsub.listen():
+            if time.time() > exp:
+                await ws.close(code=4401)
+                break
             if msg.get("type") == "message":
                 await ws.send_text(msg["data"])
     except WebSocketDisconnect:

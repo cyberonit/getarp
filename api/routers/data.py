@@ -4,10 +4,13 @@ import io
 import ipaddress
 import os
 
-from fastapi import APIRouter, HTTPException, Path, Query
+from fastapi import APIRouter, HTTPException, Path, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 import db
 
+limiter = Limiter(key_func=get_remote_address)
 router = APIRouter(prefix="/api", tags=["data"])
 
 DOCS_DIR = os.environ.get("DOCS_DIR", "/app/docs")
@@ -17,7 +20,8 @@ ALLOWED_DOCS = {
 
 
 @router.get("/docs")
-async def list_docs():
+@limiter.limit("60/minute")
+async def list_docs(request: Request):
     out = []
     for name, label in ALLOWED_DOCS.items():
         path = os.path.join(DOCS_DIR, name)
@@ -27,7 +31,8 @@ async def list_docs():
 
 
 @router.get("/docs/{name}")
-async def get_doc(name: str):
+@limiter.limit("60/minute")
+async def get_doc(request: Request, name: str):
     if name not in ALLOWED_DOCS:
         raise HTTPException(404, "not found")
     path = os.path.join(DOCS_DIR, name)
@@ -37,7 +42,8 @@ async def get_doc(name: str):
 
 
 @router.get("/ips")
-async def list_ips(limit: int = Query(100, ge=1, le=500), order: str = "threat_score"):
+@limiter.limit("60/minute")
+async def list_ips(request: Request, limit: int = Query(100, ge=1, le=500), order: str = "threat_score"):
     order_col = {"threat_score": "threat_score", "last_seen": "last_seen",
                  "event_count": "event_count"}.get(order, "threat_score")
     async with db.pool().acquire() as con:
@@ -51,7 +57,8 @@ async def list_ips(limit: int = Query(100, ge=1, le=500), order: str = "threat_s
 
 
 @router.get("/ips/{ip}")
-async def ip_detail(ip: str):
+@limiter.limit("60/minute")
+async def ip_detail(request: Request, ip: str):
     try:
         ipaddress.ip_address(ip)
     except ValueError:
@@ -87,7 +94,8 @@ async def ip_detail(ip: str):
 
 
 @router.get("/events/latest")
-async def latest_events(limit: int = Query(50, ge=1, le=200)):
+@limiter.limit("60/minute")
+async def latest_events(request: Request, limit: int = Query(50, ge=1, le=200)):
     async with db.pool().acquire() as con:
         rows = await con.fetch(
             "SELECT ts, sensor, service, event_type, host(src_ip) AS src_ip, "
@@ -97,7 +105,8 @@ async def latest_events(limit: int = Query(50, ge=1, le=200)):
 
 
 @router.get("/scans")
-async def scans(limit: int = Query(100, ge=1, le=500)):
+@limiter.limit("60/minute")
+async def scans(request: Request, limit: int = Query(100, ge=1, le=500)):
     async with db.pool().acquire() as con:
         rows = await con.fetch(
             "SELECT s.id, s.ts, host(s.src_ip) AS src_ip, s.scan_type, s.port_count, s.ports, s.detail, "
@@ -108,7 +117,8 @@ async def scans(limit: int = Query(100, ge=1, le=500)):
 
 
 @router.get("/attacks")
-async def attacks(limit: int = Query(100, ge=1, le=500)):
+@limiter.limit("60/minute")
+async def attacks(request: Request, limit: int = Query(100, ge=1, le=500)):
     async with db.pool().acquire() as con:
         rows = await con.fetch(
             "SELECT a.id, a.ts, host(a.src_ip) AS src_ip, a.attack_type, a.service, a.severity, a.evidence, "
@@ -119,7 +129,8 @@ async def attacks(limit: int = Query(100, ge=1, le=500)):
 
 
 @router.get("/behavior")
-async def behavior(limit: int = Query(100, ge=1, le=500)):
+@limiter.limit("60/minute")
+async def behavior(request: Request, limit: int = Query(100, ge=1, le=500)):
     async with db.pool().acquire() as con:
         rows = await con.fetch(
             "SELECT host(b.src_ip) AS src_ip, b.sessions, b.threat_score, b.tooling_hints, b.tactics, "
@@ -130,7 +141,8 @@ async def behavior(limit: int = Query(100, ge=1, le=500)):
 
 
 @router.get("/top-countries")
-async def top_countries(window: str = Query("1h")):
+@limiter.limit("60/minute")
+async def top_countries(request: Request, window: str = Query("1h")):
     spans = {"1h": "1 hour", "24h": "24 hours", "7d": "7 days", "30d": "30 days"}
     span = spans.get(window)
     if not span:
@@ -146,7 +158,8 @@ async def top_countries(window: str = Query("1h")):
 
 
 @router.get("/top-as")
-async def top_as(window: str = Query("1h")):
+@limiter.limit("60/minute")
+async def top_as(request: Request, window: str = Query("1h")):
     spans = {"1h": "1 hour", "24h": "24 hours", "7d": "7 days", "30d": "30 days"}
     span = spans.get(window)
     if not span:
@@ -162,7 +175,8 @@ async def top_as(window: str = Query("1h")):
 
 
 @router.get("/reports")
-async def reports(limit: int = Query(30, ge=1, le=100)):
+@limiter.limit("60/minute")
+async def reports(request: Request, limit: int = Query(30, ge=1, le=100)):
     async with db.pool().acquire() as con:
         rows = await con.fetch(
             "SELECT id, created_at, kind, period_from, period_to, summary "
@@ -171,7 +185,8 @@ async def reports(limit: int = Query(30, ge=1, le=100)):
 
 
 @router.get("/reports/{rid}")
-async def report_html(rid: int = Path(ge=1, le=2_147_483_647)):
+@limiter.limit("60/minute")
+async def report_html(request: Request, rid: int = Path(ge=1, le=2_147_483_647)):
     async with db.pool().acquire() as con:
         row = await con.fetchrow("SELECT html, summary FROM reports WHERE id=$1", rid)
     return {"html": row["html"] if row else "", "summary": row["summary"] if row else {}}
@@ -193,7 +208,8 @@ def _csv_row(values):
 
 
 @router.get("/reports/{rid}/csv")
-async def report_csv(rid: int = Path(ge=1, le=2_147_483_647)):
+@limiter.limit("60/minute")
+async def report_csv(request: Request, rid: int = Path(ge=1, le=2_147_483_647)):
     async with db.pool().acquire() as con:
         row = await con.fetchrow(
             "SELECT id, created_at, kind, period_from, period_to, summary FROM reports WHERE id=$1", rid)
