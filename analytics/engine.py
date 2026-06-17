@@ -21,6 +21,7 @@ from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 
 import asyncpg
+import httpx
 import redis.asyncio as redis
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "correlation"))
@@ -243,7 +244,24 @@ class Engine:
             except Exception as e:
                 print(f"[analytics] report: {e}", flush=True)
 
+    async def _blocked_ips_count(self) -> int:
+        lapi = self.settings.get("CROWDSEC_LAPI_URL", "http://crowdsec:8080")
+        key = self.settings.get("CROWDSEC_BOUNCER_KEY", "")
+        if not key:
+            return 0
+        try:
+            async with httpx.AsyncClient(timeout=5) as c:
+                r = await c.get(f"{lapi}/v1/decisions",
+                                headers={"X-Api-Key": key})
+            decisions = r.json() or []
+            local = [d for d in decisions if d.get("origin") != "CAPI"]
+            return len({d.get("value") for d in local if d.get("value")})
+        except Exception as e:
+            print(f"[analytics] blocked count: {e}", flush=True)
+            return 0
+
     async def build_report(self, kind: str, span: str):
+        blocked = await self._blocked_ips_count()
         async with self.pool.acquire() as con:
             total = await con.fetchval(
                 "SELECT count(*) FROM events WHERE ts > now()-$1::interval", span)
@@ -261,6 +279,7 @@ class Engine:
                 "ORDER BY i.threat_score DESC LIMIT 20", span)
             summary = {
                 "events": total, "unique_ips": ips, "scans": scans,
+                "blocked_ips": blocked,
                 "attacks_by_type": [dict(r) for r in attacks],
                 "top_attackers": [dict(r) for r in top],
             }
@@ -285,7 +304,7 @@ class Engine:
                       for a in s["attacks_by_type"])
         return f"""<html><body style="font-family:system-ui">
 <h1>getarp.net {esc(kind)} report</h1>
-<p>Events: {esc(str(s['events']))} &middot; Unique IPs: {esc(str(s['unique_ips']))} &middot; Scans: {esc(str(s['scans']))}</p>
+<p>Events: {esc(str(s['events']))} &middot; Unique IPs: {esc(str(s['unique_ips']))} &middot; Scans: {esc(str(s['scans']))} &middot; IPs blocked: {esc(str(s.get('blocked_ips', 0)))}</p>
 <h3>Attacks by type</h3><ul>{atk}</ul>
 <h3>Top attackers</h3>
 <table border=1 cellpadding=4><tr><th>IP</th><th>Score</th><th>Class</th><th>Country</th><th>AS</th><th>Org</th></tr>

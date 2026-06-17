@@ -78,7 +78,7 @@ def _render_report_html(kind: str, s: dict) -> str:
                   for a in s.get("attacks_by_type", []))
     return f"""<html><body style="font-family:system-ui">
 <h1>getarp.net {esc(kind)} report</h1>
-<p>Events: {esc(str(s.get('events', 0)))} &middot; Unique IPs: {esc(str(s.get('unique_ips', 0)))} &middot; Scans: {esc(str(s.get('scans', 0)))}</p>
+<p>Events: {esc(str(s.get('events', 0)))} &middot; Unique IPs: {esc(str(s.get('unique_ips', 0)))} &middot; Scans: {esc(str(s.get('scans', 0)))} &middot; IPs blocked: {esc(str(s.get('blocked_ips', 0)))}</p>
 <h3>Attacks by type</h3><ul>{atk}</ul>
 <h3>Top attackers</h3>
 <table border=1 cellpadding=4><tr><th>IP</th><th>Score</th><th>Class</th><th>Country</th><th>AS</th><th>Org</th></tr>
