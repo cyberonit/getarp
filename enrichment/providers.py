@@ -172,7 +172,7 @@ class AbusechProvider(EnrichmentProvider):
     """Abuse.ch provider. Uses the Hunting API when ABUSECH_KEY is set,
     falls back to the public Feodo Tracker IP blocklist otherwise."""
     name = "abusech"
-    _HUNTING_URL = "https://hunting-api.abuse.ch/api/v1/"
+    _HUNTING_URL = "https://hunting.abuse.ch/api/v1/"
     _BLOCKLIST_URL = "https://feodotracker.abuse.ch/downloads/ipblocklist.txt"
     _CACHE_PATH = os.path.join(os.path.expanduser("~"), ".cache", "feodo_ipblocklist.txt")
     _TTL = 3600
@@ -230,11 +230,10 @@ class AbusechProvider(EnrichmentProvider):
     async def _hunting_lookup(self, ip: str) -> Enrichment:
         e = Enrichment(src_ip=ip, provider=self.name)
         async with httpx.AsyncClient(timeout=30) as c:
-            resp = await c.post(
-                self._HUNTING_URL,
-                headers={"Auth-Key": self._key},
-                json={"query": "search", "search": ip},
-            )
+            resp = await c.post(self._HUNTING_URL, data={
+                "auth_key": self._key,
+                "search": ip,
+            })
             resp.raise_for_status()
         data = resp.json()
         e.raw = data
