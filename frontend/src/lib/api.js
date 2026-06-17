@@ -38,7 +38,9 @@ export const api = {
   docs: () => get('/docs'),
   docUrl: (name) => `${BASE}/docs/${name}`,
 
+  latestEvents: (limit = 50) => get(`/events/latest?limit=${limit}`),
   crowdsecOverview: () => get('/admin/crowdsec/overview'),
+  crowdsecDecisions: () => get('/admin/crowdsec/decisions'),
 
   settings: () => get('/admin/settings'),
   async saveSetting(key, value) {

@@ -86,6 +86,16 @@ async def ip_detail(ip: str):
     }
 
 
+@router.get("/events/latest")
+async def latest_events(limit: int = Query(50, ge=1, le=200)):
+    async with db.pool().acquire() as con:
+        rows = await con.fetch(
+            "SELECT ts, sensor, service, event_type, host(src_ip) AS src_ip, "
+            "dst_port, username, command, signature "
+            "FROM events ORDER BY ts DESC LIMIT $1", limit)
+    return [dict(r) for r in rows]
+
+
 @router.get("/scans")
 async def scans(limit: int = Query(100, ge=1, le=500)):
     async with db.pool().acquire() as con:
