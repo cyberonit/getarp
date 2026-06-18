@@ -162,39 +162,112 @@ class GreyNoiseProvider(EnrichmentProvider):
 
 @register
 class VirusTotalProvider(EnrichmentProvider):
-    """VirusTotal IP reputation via the v3 API. Requires a free API key."""
+    """VirusTotal IP reputation via the v3 API. Requires a free API key.
+
+    Free-tier limits: 500 requests/day, 4 requests/minute.
+    This provider tracks both and serves cached results when limits are near."""
     name = "virustotal"
     URL = "https://www.virustotal.com/api/v3/ip_addresses/"
 
+    _MAX_CACHE = 10000
+    _DEFAULT_DAILY_QUOTA = 480
+    _MIN_REQUEST_INTERVAL = 15.5
+
+    def __init__(self, settings: dict):
+        super().__init__(settings)
+        self._cache: dict[str, Enrichment] = {}
+        self._cache_ts: dict[str, float] = {}
+        self._cache_ttl = 86400
+        self._daily_quota = int(settings.get("VT_DAILY_QUOTA", self._DEFAULT_DAILY_QUOTA))
+        self._daily_count = 0
+        self._daily_reset: float = 0.0
+        self._last_request: float = 0.0
+        self._rate_limited_until: float = 0.0
+        self._lock = asyncio.Lock()
+
+    def _cache_put(self, ip: str, e: Enrichment):
+        if len(self._cache) >= self._MAX_CACHE:
+            oldest = min(self._cache_ts, key=self._cache_ts.get)
+            del self._cache[oldest], self._cache_ts[oldest]
+        self._cache[ip] = e
+        self._cache_ts[ip] = time.time()
+
+    def _reset_daily_if_needed(self):
+        now = time.time()
+        if now >= self._daily_reset:
+            self._daily_count = 0
+            midnight = now - (now % 86400) + 86400
+            self._daily_reset = midnight
+
     async def enrich(self, ip: str) -> Enrichment:
+        now = time.time()
+
+        cached = self._cache.get(ip)
+        if cached and now - self._cache_ts.get(ip, 0) < self._cache_ttl:
+            return cached
+
         e = Enrichment(src_ip=ip, provider=self.name)
         key = self.settings.get("VIRUSTOTAL_KEY")
         if not key:
             e.categories = ["api-key-missing"]
             return e
-        try:
-            async with httpx.AsyncClient(timeout=10) as c:
-                resp = await c.get(self.URL + ip, headers={"x-apikey": key})
-            if resp.status_code == 404:
-                e.reputation = "clean"
-                return e
-            resp.raise_for_status()
-            attrs = resp.json().get("data", {}).get("attributes", {})
-            e.raw = attrs
-            stats = attrs.get("last_analysis_stats", {})
-            malicious = stats.get("malicious", 0)
-            suspicious = stats.get("suspicious", 0)
-            total = sum(stats.values()) or 1
-            e.confidence = malicious / total
-            e.country = attrs.get("country")
-            e.asn = str(attrs.get("asn", "") or "")
-            e.org = attrs.get("as_owner")
-            e.is_known_attacker = malicious >= 5
-            e.reputation = ("malicious" if malicious >= 5 else
-                            "suspicious" if malicious >= 1 or suspicious >= 3 else "clean")
-            e.categories = attrs.get("tags", [])
-        except Exception as ex:
-            e.raw = {"error": str(ex)}
+
+        self._reset_daily_if_needed()
+        if self._daily_count >= self._daily_quota:
+            e.reputation = "unknown"
+            e.raw = {"quota_exhausted": True,
+                     "daily_count": self._daily_count,
+                     "resets_at": int(self._daily_reset)}
+            return e
+
+        if now < self._rate_limited_until:
+            e.reputation = "unknown"
+            e.raw = {"rate_limited": True,
+                     "retry_after": int(self._rate_limited_until - now)}
+            return e
+
+        async with self._lock:
+            elapsed = time.time() - self._last_request
+            if elapsed < self._MIN_REQUEST_INTERVAL:
+                await asyncio.sleep(self._MIN_REQUEST_INTERVAL - elapsed)
+
+            try:
+                async with httpx.AsyncClient(timeout=10) as c:
+                    resp = await c.get(self.URL + ip, headers={"x-apikey": key})
+                self._last_request = time.time()
+                self._daily_count += 1
+
+                if resp.status_code == 429:
+                    retry = int(resp.headers.get("Retry-After", 60))
+                    self._rate_limited_until = time.time() + retry
+                    e.reputation = "unknown"
+                    e.raw = {"rate_limited": True, "retry_after": retry}
+                    return e
+
+                if resp.status_code == 404:
+                    e.reputation = "clean"
+                    self._cache_put(ip, e)
+                    return e
+
+                resp.raise_for_status()
+                attrs = resp.json().get("data", {}).get("attributes", {})
+                e.raw = attrs
+                stats = attrs.get("last_analysis_stats", {})
+                malicious = stats.get("malicious", 0)
+                suspicious = stats.get("suspicious", 0)
+                total = sum(stats.values()) or 1
+                e.confidence = malicious / total
+                e.country = attrs.get("country")
+                e.asn = str(attrs.get("asn", "") or "")
+                e.org = attrs.get("as_owner")
+                e.is_known_attacker = malicious >= 5
+                e.reputation = ("malicious" if malicious >= 5 else
+                                "suspicious" if malicious >= 1 or suspicious >= 3 else "clean")
+                e.categories = attrs.get("tags", [])
+            except Exception as ex:
+                e.raw = {"error": str(ex)}
+
+        self._cache_put(ip, e)
         return e
 
 
