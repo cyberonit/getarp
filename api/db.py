@@ -13,14 +13,22 @@ async def _codecs(con):
                                  schema="pg_catalog")
 
 
+def _db_user():
+    svc_pw = os.environ.get("SVC_DB_PASSWORD", "")
+    if svc_pw:
+        return os.environ.get("SVC_DB_USER", os.environ["PG_USER"]), svc_pw
+    return os.environ["PG_USER"], os.environ["PG_PASSWORD"]
+
+
 async def init_pool():
     global _pool
+    user, password = _db_user()
     _pool = await asyncpg.create_pool(
         host=os.environ["PG_HOST"],
         port=int(os.environ["PG_PORT"]),
         database=os.environ["PG_DB"],
-        user=os.environ["PG_USER"],
-        password=os.environ["PG_PASSWORD"],
+        user=user,
+        password=password,
         min_size=2, max_size=10, init=_codecs,
     )
     return _pool

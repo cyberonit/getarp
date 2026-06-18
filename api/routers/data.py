@@ -1,13 +1,15 @@
-"""Read-only data endpoints powering the public dashboard."""
+"""Data endpoints powering the dashboard. Aggregate/summary endpoints are public;
+endpoints that expose raw event data (commands, usernames, passwords) require auth."""
 import csv
 import io
 import ipaddress
 import os
 
-from fastapi import APIRouter, HTTPException, Path, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+import auth
 import db
 
 limiter = Limiter(key_func=get_remote_address)
@@ -56,9 +58,23 @@ async def list_ips(request: Request, limit: int = Query(100, ge=1, le=500), orde
     return [dict(r) for r in rows]
 
 
+def _redact_attack_evidence(evidence):
+    """Strip plaintext passwords from attack evidence before serving."""
+    if not isinstance(evidence, dict):
+        return evidence
+    redacted = dict(evidence)
+    if "sample_creds" in redacted:
+        redacted["sample_creds"] = [
+            [pair[0], "***"] if isinstance(pair, (list, tuple)) and len(pair) >= 2
+            else pair
+            for pair in redacted["sample_creds"]
+        ]
+    return redacted
+
+
 @router.get("/ips/{ip}")
 @limiter.limit("60/minute")
-async def ip_detail(request: Request, ip: str):
+async def ip_detail(request: Request, ip: str, user=Depends(auth.current_user)):
     try:
         ipaddress.ip_address(ip)
     except ValueError:
@@ -84,18 +100,29 @@ async def ip_detail(request: Request, ip: str):
         attacks = await con.fetch("""
             SELECT id, ts, host(src_ip) AS src_ip, attack_type, service, evidence, severity, ai_score
             FROM attack_events WHERE src_ip=$1 ORDER BY ts DESC LIMIT 50""", ip)
+    event_rows = []
+    for r in events:
+        row = dict(r)
+        row.pop("password", None)
+        event_rows.append(row)
+    attack_rows = []
+    for r in attacks:
+        row = dict(r)
+        row["evidence"] = _redact_attack_evidence(row.get("evidence"))
+        attack_rows.append(row)
     return {
         "info": dict(info) if info else None,
-        "events": [dict(r) for r in events],
+        "events": event_rows,
         "profile": dict(prof) if prof else None,
         "scans": [dict(r) for r in scans],
-        "attacks": [dict(r) for r in attacks],
+        "attacks": attack_rows,
     }
 
 
 @router.get("/events/latest")
 @limiter.limit("60/minute")
-async def latest_events(request: Request, limit: int = Query(50, ge=1, le=200)):
+async def latest_events(request: Request, limit: int = Query(50, ge=1, le=200),
+                        user=Depends(auth.current_user)):
     async with db.pool().acquire() as con:
         rows = await con.fetch(
             "SELECT ts, sensor, service, event_type, host(src_ip) AS src_ip, "
@@ -149,11 +176,11 @@ async def top_countries(request: Request, window: str = Query("1h")):
         raise HTTPException(400, "invalid window")
     async with db.pool().acquire() as con:
         rows = await con.fetch(
-            f"SELECT e.country, count(*) n "
-            f"FROM events ev JOIN ip_enrichment e ON e.src_ip = ev.src_ip "
-            f"WHERE ev.ts > now() - interval '{span}' AND e.country IS NOT NULL "
-            f"AND e.country != '' "
-            f"GROUP BY e.country ORDER BY n DESC LIMIT 10")
+            "SELECT e.country, count(*) n "
+            "FROM events ev JOIN ip_enrichment e ON e.src_ip = ev.src_ip "
+            "WHERE ev.ts > now() - $1::interval AND e.country IS NOT NULL "
+            "AND e.country != '' "
+            "GROUP BY e.country ORDER BY n DESC LIMIT 10", span)
     return [dict(r) for r in rows]
 
 
@@ -166,11 +193,11 @@ async def top_as(request: Request, window: str = Query("1h")):
         raise HTTPException(400, "invalid window")
     async with db.pool().acquire() as con:
         rows = await con.fetch(
-            f"SELECT e.asn, e.org, count(*) n "
-            f"FROM events ev JOIN ip_enrichment e ON e.src_ip = ev.src_ip "
-            f"WHERE ev.ts > now() - interval '{span}' AND e.asn IS NOT NULL "
-            f"AND e.asn != '' "
-            f"GROUP BY e.asn, e.org ORDER BY n DESC LIMIT 10")
+            "SELECT e.asn, e.org, count(*) n "
+            "FROM events ev JOIN ip_enrichment e ON e.src_ip = ev.src_ip "
+            "WHERE ev.ts > now() - $1::interval AND e.asn IS NOT NULL "
+            "AND e.asn != '' "
+            "GROUP BY e.asn, e.org ORDER BY n DESC LIMIT 10", span)
     return [dict(r) for r in rows]
 
 

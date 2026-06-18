@@ -27,15 +27,15 @@ class AttackDetector(Detector):
                              if e.get("event_type") in ("login_attempt", "login_success")
                              and now - e["_recv"] <= self.bf_window]
             if len(recent_logins) >= self.bf_threshold and not self._dup(ip, "bf", now):
-                creds = [(e.get("username"), e.get("password")) for e in recent_logins]
+                usernames = [e.get("username") for e in recent_logins]
                 services = {e.get("service") for e in recent_logins}
-                atype = "cred_stuffing" if len({c[0] for c in creds}) > 3 else "bruteforce"
+                atype = "cred_stuffing" if len(set(usernames)) > 3 else "bruteforce"
                 findings.append(Finding(
                     kind="attack", src_ip=ip, attack_type=atype,
                     service=",".join(s for s in services if s), severity=2,
                     detail={"attempts": len(recent_logins),
-                            "distinct_users": len({c[0] for c in creds}),
-                            "sample_creds": creds[:10]},
+                            "distinct_users": len(set(usernames)),
+                            "sample_usernames": list(dict.fromkeys(usernames))[:10]},
                 ))
 
         # 2) post-auth command execution (attacker got "in" and ran commands)

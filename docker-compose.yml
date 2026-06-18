@@ -125,7 +125,7 @@ services:
     image: redis:7.2-alpine
     restart: unless-stopped
     networks: [data_net]
-    command: redis-server --save "" --requirepass ${REDIS_PASSWORD} --maxmemory 768mb --maxmemory-policy noeviction
+    command: redis-server --save "" --requirepass ${REDIS_PASSWORD} --maxmemory 768mb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 5s
@@ -145,6 +145,11 @@ services:
       POSTGRES_DB: ${PG_DB}
       POSTGRES_USER: ${PG_USER}
       POSTGRES_PASSWORD: ${PG_PASSWORD}
+      PGOPTIONS: >-
+        -c app.pipeline_password=${SVC_PIPELINE_PASSWORD:-}
+        -c app.enrichment_password=${SVC_ENRICHMENT_PASSWORD:-}
+        -c app.analytics_password=${SVC_ANALYTICS_PASSWORD:-}
+        -c app.api_password=${SVC_API_PASSWORD:-}
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -172,6 +177,8 @@ services:
       PG_DB: ${PG_DB}
       PG_USER: ${PG_USER}
       PG_PASSWORD: ${PG_PASSWORD}
+      SVC_DB_USER: svc_pipeline
+      SVC_DB_PASSWORD: ${SVC_PIPELINE_PASSWORD:-}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
     volumes:
       - honeypot_logs:/data/logs:ro      # READ-ONLY: one-way telemetry crossing the boundary
@@ -197,6 +204,8 @@ services:
       PG_DB: ${PG_DB}
       PG_USER: ${PG_USER}
       PG_PASSWORD: ${PG_PASSWORD}
+      SVC_DB_USER: svc_enrichment
+      SVC_DB_PASSWORD: ${SVC_ENRICHMENT_PASSWORD:-}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       ENRICHMENT_PROVIDER: ${ENRICHMENT_PROVIDER}
       CROWDSEC_LAPI_URL: http://crowdsec:8080
@@ -230,6 +239,8 @@ services:
       PG_DB: ${PG_DB}
       PG_USER: ${PG_USER}
       PG_PASSWORD: ${PG_PASSWORD}
+      SVC_DB_USER: svc_analytics
+      SVC_DB_PASSWORD: ${SVC_ANALYTICS_PASSWORD:-}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       ENABLED_DETECTORS: ${ENABLED_DETECTORS:-scan,attack}
       ENABLED_PROFILERS: ${ENABLED_PROFILERS:-default}
@@ -260,6 +271,8 @@ services:
       PG_DB: ${PG_DB}
       PG_USER: ${PG_USER}
       PG_PASSWORD: ${PG_PASSWORD}
+      SVC_DB_USER: svc_api
+      SVC_DB_PASSWORD: ${SVC_API_PASSWORD:-}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-60}

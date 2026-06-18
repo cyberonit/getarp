@@ -230,6 +230,26 @@ class Engine:
         await self.r.publish(STATUS_CHANNEL, json.dumps({"type": "status", **snap}))
         print(f"[analytics] status: {level} active={snap['active_attackers']}", flush=True)
 
+    # ───────────────── retention cleanup for non-hypertables ─────────────────
+    async def retention_loop(self):
+        while True:
+            await asyncio.sleep(86400)
+            try:
+                async with self.pool.acquire() as con:
+                    await con.execute(
+                        "DELETE FROM scan_events WHERE ts < now() - interval '90 days'")
+                    await con.execute(
+                        "DELETE FROM attack_events WHERE ts < now() - interval '90 days'")
+                    await con.execute(
+                        "DELETE FROM behavior_profiles WHERE updated_at < now() - interval '90 days'")
+                    await con.execute(
+                        "DELETE FROM ips WHERE last_seen < now() - interval '180 days'")
+                    await con.execute(
+                        "DELETE FROM reports WHERE created_at < now() - interval '365 days'")
+                print("[analytics] retention cleanup done", flush=True)
+            except Exception as e:
+                print(f"[analytics] retention: {e}", flush=True)
+
     # ───────────────── daily report ─────────────────
     async def report_loop(self):
         hour = int(self.settings.get("REPORT_CRON_HOUR", 6))
@@ -323,19 +343,28 @@ async def load_settings(pool) -> dict:
     return s
 
 
+def _db_creds():
+    svc_pw = os.environ.get("SVC_DB_PASSWORD", "")
+    if svc_pw:
+        return os.environ.get("SVC_DB_USER", os.environ["PG_USER"]), svc_pw
+    return os.environ["PG_USER"], os.environ["PG_PASSWORD"]
+
+
 async def main():
+    user, password = _db_creds()
     pool = await asyncpg.create_pool(
         host=os.environ["PG_HOST"],
         port=int(os.environ["PG_PORT"]),
         database=os.environ["PG_DB"],
-        user=os.environ["PG_USER"],
-        password=os.environ["PG_PASSWORD"],
+        user=user,
+        password=password,
         min_size=2, max_size=10,
     )
     r = redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
     settings = await load_settings(pool)
     eng = Engine(pool, r, settings)
-    await asyncio.gather(eng.consume(), eng.status_loop(), eng.report_loop())
+    await asyncio.gather(eng.consume(), eng.status_loop(), eng.report_loop(),
+                         eng.retention_loop())
 
 
 if __name__ == "__main__":
