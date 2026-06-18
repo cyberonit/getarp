@@ -57,13 +57,21 @@ async def load_settings(pool) -> dict:
     return s
 
 
+def _db_creds():
+    svc_pw = os.environ.get("SVC_DB_PASSWORD", "")
+    if svc_pw:
+        return os.environ.get("SVC_DB_USER", os.environ["PG_USER"]), svc_pw
+    return os.environ["PG_USER"], os.environ["PG_PASSWORD"]
+
+
 async def main():
+    user, password = _db_creds()
     pool = await asyncpg.create_pool(
         host=os.environ["PG_HOST"],
         port=int(os.environ["PG_PORT"]),
         database=os.environ["PG_DB"],
-        user=os.environ["PG_USER"],
-        password=os.environ["PG_PASSWORD"],
+        user=user,
+        password=password,
         min_size=1, max_size=4,
     )
     r = redis.from_url(os.environ["REDIS_URL"], decode_responses=True)

@@ -18,9 +18,11 @@ getarp.net, www.getarp.net {
 	}
 
 	# ── Lock down the admin/settings surface to the operator's IP ──
+	# Default 192.0.2.1 (TEST-NET, unreachable) ensures admin is blocked
+	# if ADMIN_IP is not set — fail closed, not open.
 	@admin {
 		path /api/admin/* /api/auth/*
-		not remote_ip {$ADMIN_IP}
+		not remote_ip {$ADMIN_IP:192.0.2.1}
 	}
 	respond @admin "forbidden" 403
 

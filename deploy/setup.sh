@@ -88,11 +88,26 @@ ask_secret PG_PASSWORD "Database password"
 echo ""
 info "--- Admin dashboard ---"
 ask ADMIN_USER "Admin username" "admin"
-ask_secret ADMIN_PASSWORD "Admin password"
+while true; do
+    ask_secret ADMIN_PASSWORD "Admin password"
+    if [[ "$ADMIN_PASSWORD" == "$PG_PASSWORD" ]]; then
+        warn "Admin password must be different from database password. Try again."
+        continue
+    fi
+    break
+done
 
 echo ""
 info "--- Admin network ---"
-ask ADMIN_IP "Your management IP (Caddy restricts /api/admin to this)"
+while true; do
+    ask ADMIN_IP "Your management IP (Caddy restricts /api/admin to this)"
+    # basic validation: must look like an IP or CIDR
+    if [[ "$ADMIN_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(/[0-9]+)?$ ]] || \
+       [[ "$ADMIN_IP" =~ ^[0-9a-fA-F:]+(/[0-9]+)?$ ]]; then
+        break
+    fi
+    warn "Invalid IP address or CIDR — expected format: 1.2.3.4 or 1.2.3.0/24"
+done
 
 echo ""
 info "--- Threat intelligence API keys (all optional) ---"
@@ -116,7 +131,11 @@ ok "All input collected."
 # ═══════════════════════════════════════════════════════════════════════════
 JWT_SECRET=$(openssl rand -hex 32)
 REDIS_PASSWORD=$(openssl rand -hex 16)
-ok "JWT secret and Redis password auto-generated."
+SVC_PIPELINE_PASSWORD=$(openssl rand -hex 16)
+SVC_ENRICHMENT_PASSWORD=$(openssl rand -hex 16)
+SVC_ANALYTICS_PASSWORD=$(openssl rand -hex 16)
+SVC_API_PASSWORD=$(openssl rand -hex 16)
+ok "JWT secret, Redis password, and per-service DB passwords auto-generated."
 
 ENV_FILE="$REPO_DIR/.env"
 [[ -f "$ENV_FILE" ]] && cp "$ENV_FILE" "${ENV_FILE}.bak.$(date +%s)" \
@@ -160,6 +179,12 @@ echo "STATUS_INTERVAL_SECONDS=300"
 echo "ENABLED_DETECTORS=scan,attack"
 echo "ENABLED_PROFILERS=default"
 echo "REPORT_CRON_HOUR=6"
+echo ""
+echo "# Per-service database passwords (least-privilege roles)"
+echo "SVC_PIPELINE_PASSWORD=$SVC_PIPELINE_PASSWORD"
+echo "SVC_ENRICHMENT_PASSWORD=$SVC_ENRICHMENT_PASSWORD"
+echo "SVC_ANALYTICS_PASSWORD=$SVC_ANALYTICS_PASSWORD"
+echo "SVC_API_PASSWORD=$SVC_API_PASSWORD"
 } > "$ENV_FILE"
 
 chmod 600 "$ENV_FILE"

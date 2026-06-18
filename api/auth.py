@@ -1,6 +1,7 @@
 """JWT auth for the admin backend. Public dashboard endpoints are unauthenticated
 (read-only); settings/admin endpoints require a valid token."""
 import os
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, HTTPException, status
@@ -28,7 +29,28 @@ def verify_pw(p: str, h: str) -> bool:
 
 def make_token(sub: str, role: str) -> str:
     exp = datetime.now(timezone.utc) + timedelta(minutes=EXPIRE)
-    return jwt.encode({"sub": sub, "role": role, "exp": exp}, SECRET, algorithm=ALGO)
+    jti = uuid.uuid4().hex
+    return jwt.encode({"sub": sub, "role": role, "exp": exp, "jti": jti},
+                      SECRET, algorithm=ALGO)
+
+
+async def revoke_token(jti: str, expires_at: datetime):
+    async with db.pool().acquire() as con:
+        await con.execute(
+            "INSERT INTO revoked_tokens (jti, expires_at) VALUES ($1, $2) "
+            "ON CONFLICT DO NOTHING", jti, expires_at)
+
+
+async def is_revoked(jti: str) -> bool:
+    async with db.pool().acquire() as con:
+        return bool(await con.fetchval(
+            "SELECT 1 FROM revoked_tokens WHERE jti=$1", jti))
+
+
+async def cleanup_expired_revocations():
+    async with db.pool().acquire() as con:
+        await con.execute(
+            "DELETE FROM revoked_tokens WHERE expires_at < now()")
 
 
 async def seed_admin():
@@ -59,22 +81,31 @@ async def authenticate(username: str, password: str):
     return row
 
 
-async def current_user(token: str = Depends(oauth2)) -> dict:
+async def _validate_token(raw_token: str) -> dict:
+    """Decode + verify a JWT, checking revocation. Returns the user dict."""
     cred_err = HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials",
-                            headers={"WWW-Authenticate": "Bearer"})
+                             headers={"WWW-Authenticate": "Bearer"})
     try:
-        payload = jwt.decode(token, SECRET, algorithms=[ALGO])
+        payload = jwt.decode(raw_token, SECRET, algorithms=[ALGO])
     except InvalidTokenError:
         raise cred_err
     username = payload.get("sub")
+    jti = payload.get("jti")
     if not username:
+        raise cred_err
+    if jti and await is_revoked(jti):
         raise cred_err
     async with db.pool().acquire() as con:
         row = await con.fetchrow(
             "SELECT username, role FROM users WHERE username=$1", username)
     if not row:
         raise cred_err
-    return {"username": row["username"], "role": row["role"]}
+    return {"username": row["username"], "role": row["role"],
+            "jti": jti, "exp": payload.get("exp", 0)}
+
+
+async def current_user(token: str = Depends(oauth2)) -> dict:
+    return await _validate_token(token)
 
 
 async def require_admin(user: dict = Depends(current_user)) -> dict:

@@ -2,10 +2,13 @@ const BASE = import.meta.env.VITE_API_BASE || '/api'
 
 function token() { return localStorage.getItem('getarp_token') }
 
+function authHeaders() {
+  const t = token()
+  return t ? { Authorization: `Bearer ${t}` } : {}
+}
+
 async function get(path) {
-  const r = await fetch(BASE + path, {
-    headers: token() ? { Authorization: `Bearer ${token()}` } : {},
-  })
+  const r = await fetch(BASE + path, { headers: authHeaders() })
   if (!r.ok) throw new Error(`${r.status}`)
   return r.json()
 }
@@ -26,14 +29,22 @@ export const api = {
   reportCsvUrl: (id) => `${BASE}/reports/${id}/csv`,
 
   async login(username, password) {
-    const body = new URLSearchParams({ username, password })
-    const r = await fetch(BASE + '/auth/login', { method: 'POST', body })
+    const r = await fetch(BASE + '/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    })
     if (!r.ok) throw new Error('bad credentials')
     const d = await r.json()
     localStorage.setItem('getarp_token', d.access_token)
     return d
   },
-  logout() { localStorage.removeItem('getarp_token') },
+  async logout() {
+    try {
+      await fetch(BASE + '/auth/logout', { method: 'POST', headers: authHeaders() })
+    } catch {}
+    localStorage.removeItem('getarp_token')
+  },
   isAuthed: () => !!token(),
 
   docs: () => get('/docs'),
@@ -47,17 +58,19 @@ export const api = {
   async saveSetting(key, value) {
     const r = await fetch(BASE + '/admin/settings', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ key, value }),
     })
     if (!r.ok) throw new Error('save failed')
     return r.json()
   },
 
-  liveSocket(onMsg) {
+  async liveSocket(onMsg) {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const t = token()
-    const url = `${proto}://${location.host}${BASE}/ws/status${t ? `?token=${encodeURIComponent(t)}` : ''}`
+    const r = await fetch(BASE + '/auth/ws-ticket', { method: 'POST', headers: authHeaders() })
+    if (!r.ok) return null
+    const { ticket } = await r.json()
+    const url = `${proto}://${location.host}${BASE}/ws/status?ticket=${encodeURIComponent(ticket)}`
     const ws = new WebSocket(url)
     ws.onmessage = (e) => { try { onMsg(JSON.parse(e.data)) } catch {} }
     return ws

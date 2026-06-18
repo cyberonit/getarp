@@ -149,9 +149,27 @@ INSERT INTO settings(key, value) VALUES
   ('status_interval_seconds', '300')
 ON CONFLICT DO NOTHING;
 
+-- revoked token blacklist (for early JWT invalidation)
+CREATE TABLE revoked_tokens (
+    jti        TEXT PRIMARY KEY,
+    revoked_at TIMESTAMPTZ DEFAULT now(),
+    expires_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX idx_revoked_expires ON revoked_tokens (expires_at);
+
 -- ─────────────── retention (tune for your legal/PII requirements) ───────────────
 SELECT add_retention_policy('events', INTERVAL '90 days');
 SELECT add_retention_policy('status_snapshots', INTERVAL '180 days');
+
+-- retention for analytics tables that otherwise grow unbounded
+DO $$
+BEGIN
+    -- scan_events / attack_events: keep 90 days to match events
+    IF NOT EXISTS (SELECT 1 FROM timescaledb_information.jobs
+                   WHERE hypertable_name = 'scan_events') THEN
+        PERFORM NULL;  -- not a hypertable; use pg_cron or app-level cleanup
+    END IF;
+END $$;
 
 -- compress chunks older than 7 days (events are read-mostly past that point)
 ALTER TABLE events SET (
@@ -175,3 +193,71 @@ SELECT add_continuous_aggregate_policy('events_5m',
     start_offset => INTERVAL '1 hour',
     end_offset   => INTERVAL '5 minutes',
     schedule_interval => INTERVAL '5 minutes');
+
+-- ─────────────── per-service least-privilege roles ───────────────
+-- Each backend service gets its own role with only the grants it needs.
+-- The bootstrap user (PG_USER) owns the schema; these roles are narrower.
+
+DO $$
+DECLARE
+    pw TEXT;
+BEGIN
+    -- Passwords are set via env vars injected by setup.sh.  If the role
+    -- already exists (re-run of init.sql) the CREATE is skipped.
+
+    -- role: pipeline — INSERT events, upsert ips, read settings
+    pw := current_setting('app.pipeline_password', true);
+    IF pw IS NOT NULL AND pw != '' THEN
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'svc_pipeline') THEN
+            EXECUTE format('CREATE ROLE svc_pipeline LOGIN PASSWORD %L', pw);
+        END IF;
+        GRANT USAGE ON SCHEMA public TO svc_pipeline;
+        GRANT SELECT, INSERT ON events TO svc_pipeline;
+        GRANT SELECT, INSERT, UPDATE ON ips TO svc_pipeline;
+        GRANT SELECT ON settings TO svc_pipeline;
+        GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO svc_pipeline;
+    END IF;
+
+    -- role: enrichment — upsert ip_enrichment, update ips, read settings
+    pw := current_setting('app.enrichment_password', true);
+    IF pw IS NOT NULL AND pw != '' THEN
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'svc_enrichment') THEN
+            EXECUTE format('CREATE ROLE svc_enrichment LOGIN PASSWORD %L', pw);
+        END IF;
+        GRANT USAGE ON SCHEMA public TO svc_enrichment;
+        GRANT SELECT, INSERT, UPDATE ON ip_enrichment TO svc_enrichment;
+        GRANT SELECT, UPDATE ON ips TO svc_enrichment;
+        GRANT SELECT ON settings TO svc_enrichment;
+        GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO svc_enrichment;
+    END IF;
+
+    -- role: analytics — insert scans/attacks/status/reports/profiles, update ips, read settings
+    pw := current_setting('app.analytics_password', true);
+    IF pw IS NOT NULL AND pw != '' THEN
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'svc_analytics') THEN
+            EXECUTE format('CREATE ROLE svc_analytics LOGIN PASSWORD %L', pw);
+        END IF;
+        GRANT USAGE ON SCHEMA public TO svc_analytics;
+        GRANT SELECT ON events TO svc_analytics;
+        GRANT SELECT, INSERT ON scan_events, attack_events, status_snapshots, reports TO svc_analytics;
+        GRANT SELECT, INSERT, UPDATE ON behavior_profiles TO svc_analytics;
+        GRANT SELECT, UPDATE ON ips TO svc_analytics;
+        GRANT SELECT ON ip_enrichment TO svc_analytics;
+        GRANT SELECT ON settings TO svc_analytics;
+        GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO svc_analytics;
+    END IF;
+
+    -- role: api — mostly read-only, write users/settings/reports/revoked_tokens
+    pw := current_setting('app.api_password', true);
+    IF pw IS NOT NULL AND pw != '' THEN
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'svc_api') THEN
+            EXECUTE format('CREATE ROLE svc_api LOGIN PASSWORD %L', pw);
+        END IF;
+        GRANT USAGE ON SCHEMA public TO svc_api;
+        GRANT SELECT ON events, ips, ip_enrichment, scan_events, attack_events,
+                        behavior_profiles, status_snapshots TO svc_api;
+        GRANT SELECT, INSERT, UPDATE ON users, settings, reports, revoked_tokens TO svc_api;
+        GRANT DELETE ON revoked_tokens TO svc_api;
+        GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO svc_api;
+    END IF;
+END $$;

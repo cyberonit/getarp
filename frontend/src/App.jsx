@@ -38,7 +38,7 @@ export default function App() {
         ))}
         <div className="spacer" />
         {authed && (
-          <div className="nav-item" onClick={() => { api.logout(); setAuthed(false); setView('overview') }}>
+          <div className="nav-item" onClick={() => { api.logout().then(() => { setAuthed(false); setView('overview') }) }}>
             <span>SIGN OUT</span></div>
         )}
         <div className="muted" style={{ fontSize: 10, marginTop: 10 }}>getarp.net · v0.1</div>

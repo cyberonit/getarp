@@ -3,14 +3,16 @@
 import asyncio
 import json
 import os
+import secrets
 import time
+from datetime import datetime, timezone
 
 import redis.asyncio as redis
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import OAuth2PasswordRequestForm
 import jwt
 from jwt.exceptions import InvalidTokenError
+from pydantic import BaseModel
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -43,6 +45,7 @@ app.include_router(honeypot.router)
 
 R = None
 STATUS_CHANNEL = "status:live"
+WS_TICKET_TTL = 30  # seconds — single-use ticket for WebSocket auth
 
 
 @app.on_event("startup")
@@ -58,9 +61,14 @@ LOGIN_MAX_ATTEMPTS = 5
 LOGIN_WINDOW_SECONDS = 900  # 15 min
 
 
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
 @app.post("/api/auth/login")
 @limiter.limit("10/minute")
-async def login(request: Request, form: OAuth2PasswordRequestForm = Depends()):
+async def login(request: Request, body: LoginRequest):
     ip = (request.headers.get("x-forwarded-for") or
           (request.client.host if request.client else "unknown")).split(",")[0].strip()
     key = f"login:fails:{ip}"
@@ -68,7 +76,7 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends()):
     if fails >= LOGIN_MAX_ATTEMPTS:
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
                             "too many failed login attempts, try again later")
-    user = await auth.authenticate(form.username, form.password)
+    user = await auth.authenticate(body.username, body.password)
     if not user:
         async with R.pipeline() as p:
             await p.incr(key)
@@ -80,9 +88,32 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends()):
             "token_type": "bearer", "role": user["role"]}
 
 
+@app.post("/api/auth/logout")
+async def logout(user=Depends(auth.current_user)):
+    """Revoke the current token so it cannot be reused."""
+    jti = user.get("jti")
+    exp = user.get("exp", 0)
+    if jti:
+        expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
+        await auth.revoke_token(jti, expires_at)
+    return {"ok": True}
+
+
 @app.get("/api/me")
 async def me(user=Depends(auth.current_user)):
-    return user
+    return {"username": user["username"], "role": user["role"]}
+
+
+# ───────────────────────── WebSocket ticket (single-use, short-lived) ─────
+@app.post("/api/auth/ws-ticket")
+async def ws_ticket(user=Depends(auth.current_user)):
+    """Issue a single-use, short-lived ticket for WebSocket authentication.
+    The ticket is stored in Redis and consumed on WS connect — never appears
+    in server logs or Referer headers like a query-param JWT would."""
+    ticket = secrets.token_urlsafe(32)
+    payload = json.dumps({"sub": user["username"], "role": user["role"]})
+    await R.set(f"ws:ticket:{ticket}", payload, ex=WS_TICKET_TTL)
+    return {"ticket": ticket}
 
 
 # ───────────────────────── live status (the "every 5 min" view) ─────────────────────────
@@ -131,24 +162,27 @@ async def attack_map(request: Request):
 
 # ───────────────────────── WebSocket: push live events ─────────────────────────
 @app.websocket("/api/ws/status")
-async def ws_status(ws: WebSocket, token: str = Query(...)):
-    # Browsers can't send Authorization headers on WS connections; use query param.
-    try:
-        payload = jwt.decode(token, auth.SECRET, algorithms=[auth.ALGO])
-        if not payload.get("sub"):
-            raise ValueError
-    except (InvalidTokenError, ValueError):
+async def ws_status(ws: WebSocket, ticket: str = Query(...)):
+    # Single-use ticket from /api/auth/ws-ticket — consumed on connect,
+    # never logged in URLs or leaked via Referer.
+    ticket_key = f"ws:ticket:{ticket}"
+    raw = await R.get(ticket_key)
+    if not raw:
         await ws.close(code=4401)
         return
-    exp = payload.get("exp", 0)
+    await R.delete(ticket_key)
+    try:
+        payload = json.loads(raw)
+        if not payload.get("sub"):
+            raise ValueError
+    except (json.JSONDecodeError, ValueError):
+        await ws.close(code=4401)
+        return
     await ws.accept()
     pubsub = R.pubsub()
     await pubsub.subscribe(STATUS_CHANNEL)
     try:
         async for msg in pubsub.listen():
-            if time.time() > exp:
-                await ws.close(code=4401)
-                break
             if msg.get("type") == "message":
                 await ws.send_text(msg["data"])
     except WebSocketDisconnect:

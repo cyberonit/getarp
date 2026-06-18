@@ -23,12 +23,12 @@ export default function Dashboard({ onPick }) {
   useEffect(() => {
     refresh()
     const poll = setInterval(refresh, 300000) // 5-min fallback poll
-    const ws = api.liveSocket((m) => {
+    let ws = null
+    api.liveSocket((m) => {
       if (m.type === 'status') setStatus((s) => ({ ...s, ...m }))
       else setFeed((f) => [{ ...m, at: new Date() }, ...f].slice(0, 40))
-    })
-    wsRef.current = ws
-    return () => { clearInterval(poll); ws.close() }
+    }).then((s) => { ws = s; wsRef.current = s })
+    return () => { clearInterval(poll); if (ws) ws.close() }
   }, [])
 
   useEffect(() => {

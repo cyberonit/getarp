@@ -155,6 +155,24 @@ async def tail(path: str, queue: asyncio.Queue, sensor: str):
 
 
 # ───────────────────────── writers ─────────────────────────
+def _redact_password(pw):
+    """Store a length hint instead of the actual password to preserve analytics
+    value (password length distribution, blank-vs-set) without keeping PII."""
+    if not pw:
+        return None
+    return f"[redacted:{len(pw)}chars]"
+
+
+def _redact_raw(raw_dict):
+    """Strip password fields from the raw sensor payload before storage."""
+    if not isinstance(raw_dict, dict):
+        return raw_dict
+    scrubbed = dict(raw_dict)
+    if "password" in scrubbed:
+        scrubbed["password"] = _redact_password(scrubbed["password"])
+    return scrubbed
+
+
 async def consumer(queue: asyncio.Queue, pool, r):
     while True:
         sensor, record = await queue.get()
@@ -166,6 +184,8 @@ async def consumer(queue: asyncio.Queue, pool, r):
         except (ValueError, TypeError):
             continue
         ts = _parse_ts(e["ts"])
+        stored_password = _redact_password(e["password"])
+        stored_raw = json.dumps(_redact_raw(e["raw"]), default=str)
         try:
             async with pool.acquire() as con:
                 await con.execute(
@@ -176,8 +196,8 @@ async def consumer(queue: asyncio.Queue, pool, r):
                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)""",
                     uuid.UUID(e["event_id"]), ts, e["sensor"], e["service"],
                     e["event_type"], e["src_ip"], e["src_port"], e["dst_port"],
-                    e["username"], e["password"], e["command"], e["signature"],
-                    e["severity"], e["session"], json.dumps(e["raw"], default=str),
+                    e["username"], stored_password, e["command"], e["signature"],
+                    e["severity"], e["session"], stored_raw,
                 )
                 is_new = await _upsert_ip(con, e)
         except Exception as ex:
@@ -217,13 +237,21 @@ def _parse_ts(s):
         return datetime.now(timezone.utc)
 
 
+def _db_creds():
+    svc_pw = os.environ.get("SVC_DB_PASSWORD", "")
+    if svc_pw:
+        return os.environ.get("SVC_DB_USER", os.environ["PG_USER"]), svc_pw
+    return os.environ["PG_USER"], os.environ["PG_PASSWORD"]
+
+
 async def main():
+    user, password = _db_creds()
     pool = await asyncpg.create_pool(
         host=os.environ["PG_HOST"],
         port=int(os.environ["PG_PORT"]),
         database=os.environ["PG_DB"],
-        user=os.environ["PG_USER"],
-        password=os.environ["PG_PASSWORD"],
+        user=user,
+        password=password,
         min_size=2, max_size=8,
     )
     r = redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
