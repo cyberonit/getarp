@@ -11,9 +11,19 @@ const NAV = [
   ['attacks', 'ATTACKS'],
   ['behavior', 'BEHAVIOR'],
   ['reports', 'REPORTS'],
-  ['settings', 'SETTINGS'],
   ['docs', 'DOCS'],
+  ['contact', 'CONTACT'],
+  ['settings', 'SETTINGS'],
 ]
+
+function Contact() {
+  return (
+    <div className="card"><h3><span>contact</span></h3>
+      <div className="body">
+        <p>For inquiries, reach us at <a href="mailto:office@cyberonit.com">office@cyberonit.com</a></p>
+      </div></div>
+  )
+}
 
 const AUTH_VIEWS = ['settings']
 
@@ -50,6 +60,7 @@ export default function App() {
         {view === 'attacks' && <Attacks onPick={setPick} />}
         {view === 'behavior' && <Behavior onPick={setPick} />}
         {view === 'reports' && <Reports />}
+        {view === 'contact' && <Contact />}
         {view === 'settings' && <Settings />}
         {view === 'docs' && <Docs />}
       </main>
