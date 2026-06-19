@@ -69,10 +69,13 @@ class LoginRequest(BaseModel):
 @app.post("/api/auth/login")
 @limiter.limit("10/minute")
 async def login(request: Request, body: LoginRequest):
-    ip = (request.headers.get("x-forwarded-for") or
-          (request.client.host if request.client else "unknown")).split(",")[0].strip()
+    ip = request.client.host if request.client else "unknown"
     key = f"login:fails:{ip}"
-    fails = int(await R.get(key) or 0)
+    raw = await R.get(key)
+    try:
+        fails = int(raw) if raw else 0
+    except (ValueError, TypeError):
+        fails = 0
     if fails >= LOGIN_MAX_ATTEMPTS:
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
                             "too many failed login attempts, try again later")

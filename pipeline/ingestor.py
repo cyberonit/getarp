@@ -203,12 +203,14 @@ async def consumer(queue: asyncio.Queue, pool, r):
         except Exception as ex:
             print(f"[pipeline] db error: {str(ex).replace(chr(10), ' ').replace(chr(13), '')}", flush=True)
             continue
-        # publish to the bus
-        payload = {k: ("" if v is None else str(v)) for k, v in e.items() if k != "raw"}
-        await r.xadd(EVENTS_STREAM, payload, maxlen=200000, approximate=True)
-        if is_new:
-            await r.xadd(ENRICH_STREAM, {"src_ip": e["src_ip"]}, maxlen=50000,
-                         approximate=True)
+        try:
+            payload = {k: ("" if v is None else str(v)) for k, v in e.items() if k != "raw"}
+            await r.xadd(EVENTS_STREAM, payload, maxlen=200000, approximate=True)
+            if is_new:
+                await r.xadd(ENRICH_STREAM, {"src_ip": e["src_ip"]}, maxlen=50000,
+                             approximate=True)
+        except Exception as ex:
+            print(f"[pipeline] redis error: {str(ex).replace(chr(10), ' ').replace(chr(13), '')}", flush=True)
 
 
 async def _upsert_ip(con, e) -> bool:
