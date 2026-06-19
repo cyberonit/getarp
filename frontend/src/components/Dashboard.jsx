@@ -51,7 +51,7 @@ export default function Dashboard({ onPick }) {
       <div className="strip">
         <div className="stat hot">
           <div className="k">live attackers · 5m</div>
-          <div className="v">{status.live_attackers ?? '—'}</div><div className="spark" /></div>
+          <div className="v">{status.active_attackers ?? status.live_attackers ?? '—'}</div><div className="spark" /></div>
         <div className="stat ok">
           <div className="k">new ips · 5m</div>
           <div className="v">{status.new_ips ?? '—'}</div><div className="spark" /></div>

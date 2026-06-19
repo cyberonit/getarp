@@ -195,7 +195,8 @@ async def handle_redis(reader, writer, dst_port):
             elif "PING" in upper:
                 writer.write(b"+PONG\r\n")
             elif "INFO" in upper:
-                writer.write(b"$24\r\nredis_version:7.2.4\r\nrole:master\r\n")
+                info = b"redis_version:7.2.4\r\nrole:master"
+                writer.write(b"$" + str(len(info)).encode() + b"\r\n" + info + b"\r\n")
             else:
                 await log_event(service="redis", dst_port=dst_port, src_ip=ip,
                                 src_port=sport, event_type="command",

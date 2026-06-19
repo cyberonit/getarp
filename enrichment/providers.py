@@ -28,9 +28,8 @@ class CrowdSecProvider(EnrichmentProvider):
             if time.time() - self._last_fetch < self._TTL:
                 return
             try:
-                async with httpx.AsyncClient(timeout=10) as c:
-                    resp = await c.get(f"{self._lapi}/v1/decisions",
-                                       headers={"X-Api-Key": self._key})
+                resp = await self.http().get(f"{self._lapi}/v1/decisions",
+                                            headers={"X-Api-Key": self._key})
                 raw = resp.json() or []
                 local = [d for d in raw if d.get("origin") != "CAPI"]
                 new: dict[str, list[str]] = {}
@@ -40,18 +39,17 @@ class CrowdSecProvider(EnrichmentProvider):
                         new.setdefault(ip, []).append(d.get("scenario", ""))
                 self._decisions = new
                 print(f"[crowdsec] refreshed: {len(new)} banned IPs", flush=True)
+                self._last_fetch = time.time()
             except Exception as ex:
                 print(f"[crowdsec] refresh failed: {ex}", flush=True)
-            self._last_fetch = time.time()
 
     async def _cti_lookup(self, ip: str) -> Enrichment | None:
         if not self._cti_key:
             return None
         try:
-            async with httpx.AsyncClient(timeout=10) as c:
-                resp = await c.get(
-                    self._CTI_URL + ip,
-                    headers={"x-api-key": self._cti_key})
+            resp = await self.http().get(
+                self._CTI_URL + ip,
+                headers={"x-api-key": self._cti_key})
             if resp.status_code == 404:
                 return None
             if resp.status_code == 429:
@@ -116,10 +114,9 @@ class AbuseIPDBProvider(EnrichmentProvider):
             e.categories = ["api-key-missing"]
             return e
         try:
-            async with httpx.AsyncClient(timeout=8) as c:
-                resp = await c.get(self.URL,
-                                   headers={"Key": key, "Accept": "application/json"},
-                                   params={"ipAddress": ip, "maxAgeInDays": 90})
+            resp = await self.http(timeout=8).get(
+                self.URL, headers={"Key": key, "Accept": "application/json"},
+                params={"ipAddress": ip, "maxAgeInDays": 90})
             resp.raise_for_status()
             d = resp.json().get("data", {})
             e.raw = d
@@ -176,8 +173,7 @@ class GreyNoiseProvider(EnrichmentProvider):
         key = self.settings.get("GREYNOISE_KEY")
         headers = {"key": key} if key else {}
         try:
-            async with httpx.AsyncClient(timeout=8) as c:
-                resp = await c.get(self.URL + ip, headers=headers)
+            resp = await self.http(timeout=8).get(self.URL + ip, headers=headers)
             if resp.status_code == 429:
                 retry = int(resp.headers.get("Retry-After", self._COOLDOWN))
                 self._rate_limited_until = now + retry
@@ -276,8 +272,7 @@ class VirusTotalProvider(EnrichmentProvider):
                 await asyncio.sleep(self._MIN_REQUEST_INTERVAL - elapsed)
 
             try:
-                async with httpx.AsyncClient(timeout=10) as c:
-                    resp = await c.get(self.URL + ip, headers={"x-apikey": key})
+                resp = await self.http().get(self.URL + ip, headers={"x-apikey": key})
                 self._last_request = time.time()
                 self._daily_count += 1
 
@@ -358,8 +353,8 @@ class AbusechProvider(EnrichmentProvider):
             text = None
             for attempt in range(4):
                 try:
-                    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
-                        resp = await c.get(self._BLOCKLIST_URL)
+                    resp = await self.http(timeout=30).get(
+                        self._BLOCKLIST_URL, follow_redirects=True)
                     if resp.status_code == 200 and resp.text.strip():
                         text = resp.text
                         break
@@ -388,13 +383,12 @@ class AbusechProvider(EnrichmentProvider):
             return e
         # fall through to ThreatFox API
         try:
-            async with httpx.AsyncClient(timeout=30) as c:
-                resp = await c.post(
-                    self._THREATFOX_URL,
-                    headers={"Auth-Key": self._key},
-                    json={"query": "search_ioc", "search_term": ip, "exact_match": True},
-                )
-                resp.raise_for_status()
+            resp = await self.http(timeout=30).post(
+                self._THREATFOX_URL,
+                headers={"Auth-Key": self._key},
+                json={"query": "search_ioc", "search_term": ip, "exact_match": True},
+            )
+            resp.raise_for_status()
             data = resp.json()
             e.raw = data
             hits = data.get("data") if isinstance(data.get("data"), list) else []

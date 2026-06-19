@@ -11,15 +11,20 @@ from auth import require_admin
 router = APIRouter(prefix="/api/admin/crowdsec", tags=["crowdsec"])
 
 LAPI_URL = os.environ.get("CROWDSEC_LAPI_URL", "http://crowdsec:8080")
-LAPI_KEY = os.environ["CROWDSEC_BOUNCER_KEY"]
+LAPI_KEY = os.environ.get("CROWDSEC_BOUNCER_KEY", "")
 
 
 async def _decisions():
+    if not LAPI_KEY:
+        raise HTTPException(503, "CROWDSEC_BOUNCER_KEY not configured")
     async with httpx.AsyncClient(timeout=5) as client:
         r = await client.get(f"{LAPI_URL}/v1/decisions", headers={"X-Api-Key": LAPI_KEY})
     if r.status_code != 200:
         raise HTTPException(502, "crowdsec LAPI unavailable")
-    return r.json() or []
+    try:
+        return r.json() or []
+    except (ValueError, KeyError):
+        raise HTTPException(502, "crowdsec LAPI returned invalid JSON")
 
 
 async def local_decisions():

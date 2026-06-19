@@ -4,6 +4,7 @@ source swappable: implement enrich(), register the class, set ENRICHMENT_PROVIDE
 """
 from dataclasses import dataclass, field, asdict
 from typing import Optional
+import httpx
 
 
 @dataclass
@@ -28,6 +29,12 @@ class EnrichmentProvider:
 
     def __init__(self, settings: dict):
         self.settings = settings
+        self._http: httpx.AsyncClient | None = None
+
+    def http(self, timeout: float = 10) -> httpx.AsyncClient:
+        if self._http is None or self._http.is_closed:
+            self._http = httpx.AsyncClient(timeout=timeout)
+        return self._http
 
     async def enrich(self, ip: str) -> Enrichment:
         raise NotImplementedError
