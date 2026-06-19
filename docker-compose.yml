@@ -94,7 +94,7 @@ services:
   # ──────────────────── INTEL + ENFORCEMENT (CrowdSec) ────────────────────
   # CrowdSec LAPI — detection engine + community CTI sync (needs egress_net for CAPI)
   crowdsec:
-    image: crowdsecurity/crowdsec:v1.6
+    image: crowdsecurity/crowdsec:v1.7.8
     restart: unless-stopped
     networks: [data_net, egress_net]    # data_net: talks to nothing on internet;
                                         # egress_net: pulls collections + syncs CAPI
