@@ -264,31 +264,22 @@ class Engine:
             except Exception as e:
                 print(f"[analytics] report: {e}", flush=True)
 
-    async def _blocked_ips_count(self) -> int:
-        lapi = self.settings.get("CROWDSEC_LAPI_URL", "http://crowdsec:8080")
-        key = self.settings.get("CROWDSEC_BOUNCER_KEY", "")
-        if not key:
-            return 0
-        try:
-            async with httpx.AsyncClient(timeout=5) as c:
-                r = await c.get(f"{lapi}/v1/decisions",
-                                headers={"X-Api-Key": key})
-            decisions = r.json() or []
-            local = [d for d in decisions if d.get("origin") != "CAPI"]
-            return len({d.get("value") for d in local if d.get("value")})
-        except Exception as e:
-            print(f"[analytics] blocked count: {e}", flush=True)
-            return 0
+    async def _blocked_ips_count(self, span: str) -> int:
+        async with self.pool.acquire() as con:
+            return await con.fetchval(
+                "SELECT count(*) FROM ip_enrichment e JOIN ips i ON i.src_ip = e.src_ip "
+                "WHERE e.is_known_attacker = true AND i.last_seen > now()-$1::interval", span)
 
     async def build_report(self, kind: str, span: str):
-        blocked = await self._blocked_ips_count()
+        blocked = await self._blocked_ips_count(span)
         async with self.pool.acquire() as con:
             total = await con.fetchval(
                 "SELECT count(*) FROM events WHERE ts > now()-$1::interval", span)
             ips = await con.fetchval(
                 "SELECT count(DISTINCT src_ip) FROM events WHERE ts > now()-$1::interval", span)
             scans = await con.fetchval(
-                "SELECT count(*) FROM scan_events WHERE ts > now()-$1::interval", span)
+                "SELECT count(*) FROM ips WHERE classification IN ('scanner','prober') "
+                "AND last_seen > now()-$1::interval", span)
             attacks = await con.fetch(
                 "SELECT attack_type, count(*) n FROM attack_events "
                 "WHERE ts > now()-$1::interval GROUP BY attack_type ORDER BY n DESC", span)
