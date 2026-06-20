@@ -63,10 +63,10 @@ function IntelSources({ raw }) {
 
 export default function Detail({ ip, onClose }) {
   const [d, setD] = useState(null)
-  const [err, setErr] = useState(null)
+  const [err, setErr] = useState(false)
   useEffect(() => {
-    setD(null); setErr(null)
-    api.ipDetail(ip).then(setD).catch((e) => setErr(e.message === '401' ? 'auth' : 'load'))
+    setD(null); setErr(false)
+    api.ipDetail(ip).then(setD).catch(() => setErr(true))
   }, [ip])
 
   return (
@@ -75,8 +75,7 @@ export default function Detail({ ip, onClose }) {
       <div className="drawer">
         <span className="close" onClick={onClose}>[ close ]</span>
         <h2>{ip}</h2>
-        {err === 'auth' && <div className="muted">sign in to view IP details</div>}
-        {err === 'load' && <div className="muted">failed to load IP detail</div>}
+        {err && <div className="muted">failed to load IP detail</div>}
         {!d && !err && <div className="muted">loading…</div>}
         {d && (() => {
           const info = d.info || {}

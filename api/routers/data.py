@@ -74,7 +74,7 @@ def _redact_attack_evidence(evidence):
 
 @router.get("/ips/{ip}")
 @limiter.limit("60/minute")
-async def ip_detail(request: Request, ip: str, user=Depends(auth.current_user)):
+async def ip_detail(request: Request, ip: str):
     try:
         ipaddress.ip_address(ip)
     except ValueError:
