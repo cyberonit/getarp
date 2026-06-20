@@ -69,13 +69,10 @@ class LoginRequest(BaseModel):
 @app.post("/api/auth/login")
 @limiter.limit("10/minute")
 async def login(request: Request, body: LoginRequest):
-    ip = request.client.host if request.client else "unknown"
+    ip = (request.headers.get("x-forwarded-for") or
+          (request.client.host if request.client else "unknown")).split(",")[0].strip()
     key = f"login:fails:{ip}"
-    raw = await R.get(key)
-    try:
-        fails = int(raw) if raw else 0
-    except (ValueError, TypeError):
-        fails = 0
+    fails = int(await R.get(key) or 0)
     if fails >= LOGIN_MAX_ATTEMPTS:
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
                             "too many failed login attempts, try again later")
@@ -129,13 +126,11 @@ async def status_now(request: Request):
             "SELECT * FROM status_snapshots ORDER BY ts DESC LIMIT 1")
         live_attackers = await con.fetchval(
             "SELECT count(DISTINCT src_ip) FROM events WHERE ts>now()-interval '5 min'")
-        tracked_hosts = await con.fetchval("SELECT count(*) FROM ips")
         recent_attacks = await con.fetch(
             "SELECT ts, host(src_ip) AS src_ip, attack_type, service FROM attack_events "
             "ORDER BY ts DESC LIMIT 10")
     out = dict(snap) if snap else {}
     out["live_attackers"] = live_attackers or 0
-    out["tracked_hosts"] = tracked_hosts or 0
     out["recent_attacks"] = [dict(r) for r in recent_attacks]
     return out
 

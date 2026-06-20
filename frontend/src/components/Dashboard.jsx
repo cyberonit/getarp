@@ -51,7 +51,7 @@ export default function Dashboard({ onPick }) {
       <div className="strip">
         <div className="stat hot">
           <div className="k">live attackers · 5m</div>
-          <div className="v">{status.active_attackers ?? status.live_attackers ?? '—'}</div><div className="spark" /></div>
+          <div className="v">{status.live_attackers ?? '—'}</div><div className="spark" /></div>
         <div className="stat ok">
           <div className="k">new ips · 5m</div>
           <div className="v">{status.new_ips ?? '—'}</div><div className="spark" /></div>
@@ -60,7 +60,7 @@ export default function Dashboard({ onPick }) {
           <div className="v">{status.events_per_min != null ? Math.round(status.events_per_min) : '—'}</div><div className="spark" /></div>
         <div className="stat">
           <div className="k">tracked hosts</div>
-          <div className="v" style={{ color: 'var(--text)' }}>{status.tracked_hosts ?? '—'}</div><div className="spark" /></div>
+          <div className="v" style={{ color: 'var(--text)' }}>{ips.length}</div><div className="spark" /></div>
       </div>
 
       <div className="threatbar">
