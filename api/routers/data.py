@@ -4,6 +4,7 @@ import csv
 import io
 import ipaddress
 import os
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
@@ -170,7 +171,8 @@ async def behavior(request: Request, limit: int = Query(100, ge=1, le=500)):
 @router.get("/top-countries")
 @limiter.limit("60/minute")
 async def top_countries(request: Request, window: str = Query("1h")):
-    spans = {"1h": "1 hour", "24h": "24 hours", "7d": "7 days", "30d": "30 days"}
+    spans = {"1h": timedelta(hours=1), "24h": timedelta(hours=24),
+             "7d": timedelta(days=7), "30d": timedelta(days=30)}
     span = spans.get(window)
     if not span:
         raise HTTPException(400, "invalid window")
@@ -178,7 +180,7 @@ async def top_countries(request: Request, window: str = Query("1h")):
         rows = await con.fetch(
             "SELECT e.country, count(*) n "
             "FROM events ev JOIN ip_enrichment e ON e.src_ip = ev.src_ip "
-            "WHERE ev.ts > now() - $1::interval AND e.country IS NOT NULL "
+            "WHERE ev.ts > now() - $1 AND e.country IS NOT NULL "
             "AND e.country != '' "
             "GROUP BY e.country ORDER BY n DESC LIMIT 10", span)
     return [dict(r) for r in rows]
@@ -187,7 +189,8 @@ async def top_countries(request: Request, window: str = Query("1h")):
 @router.get("/top-as")
 @limiter.limit("60/minute")
 async def top_as(request: Request, window: str = Query("1h")):
-    spans = {"1h": "1 hour", "24h": "24 hours", "7d": "7 days", "30d": "30 days"}
+    spans = {"1h": timedelta(hours=1), "24h": timedelta(hours=24),
+             "7d": timedelta(days=7), "30d": timedelta(days=30)}
     span = spans.get(window)
     if not span:
         raise HTTPException(400, "invalid window")
@@ -195,7 +198,7 @@ async def top_as(request: Request, window: str = Query("1h")):
         rows = await con.fetch(
             "SELECT e.asn, e.org, count(*) n "
             "FROM events ev JOIN ip_enrichment e ON e.src_ip = ev.src_ip "
-            "WHERE ev.ts > now() - $1::interval AND e.asn IS NOT NULL "
+            "WHERE ev.ts > now() - $1 AND e.asn IS NOT NULL "
             "AND e.asn != '' "
             "GROUP BY e.asn, e.org ORDER BY n DESC LIMIT 10", span)
     return [dict(r) for r in rows]
