@@ -4,7 +4,6 @@ import csv
 import io
 import ipaddress
 import os
-from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
@@ -171,36 +170,34 @@ async def behavior(request: Request, limit: int = Query(100, ge=1, le=500)):
 @router.get("/top-countries")
 @limiter.limit("60/minute")
 async def top_countries(request: Request, window: str = Query("1h")):
-    spans = {"1h": timedelta(hours=1), "24h": timedelta(hours=24),
-             "7d": timedelta(days=7), "30d": timedelta(days=30)}
-    span = spans.get(window)
-    if not span:
+    intervals = {"1h": "1 hour", "24h": "24 hours", "7d": "7 days", "30d": "30 days"}
+    iv = intervals.get(window)
+    if not iv:
         raise HTTPException(400, "invalid window")
     async with db.pool().acquire() as con:
         rows = await con.fetch(
-            "SELECT e.country, count(*) n "
-            "FROM events ev JOIN ip_enrichment e ON e.src_ip = ev.src_ip "
-            "WHERE ev.ts > now() - $1 AND e.country IS NOT NULL "
-            "AND e.country != '' "
-            "GROUP BY e.country ORDER BY n DESC LIMIT 10", span)
+            f"SELECT e.country, count(*) n "
+            f"FROM events ev JOIN ip_enrichment e ON e.src_ip = ev.src_ip "
+            f"WHERE ev.ts > now() - interval '{iv}' AND e.country IS NOT NULL "
+            f"AND e.country != '' "
+            f"GROUP BY e.country ORDER BY n DESC LIMIT 10")
     return [dict(r) for r in rows]
 
 
 @router.get("/top-as")
 @limiter.limit("60/minute")
 async def top_as(request: Request, window: str = Query("1h")):
-    spans = {"1h": timedelta(hours=1), "24h": timedelta(hours=24),
-             "7d": timedelta(days=7), "30d": timedelta(days=30)}
-    span = spans.get(window)
-    if not span:
+    intervals = {"1h": "1 hour", "24h": "24 hours", "7d": "7 days", "30d": "30 days"}
+    iv = intervals.get(window)
+    if not iv:
         raise HTTPException(400, "invalid window")
     async with db.pool().acquire() as con:
         rows = await con.fetch(
-            "SELECT e.asn, e.org, count(*) n "
-            "FROM events ev JOIN ip_enrichment e ON e.src_ip = ev.src_ip "
-            "WHERE ev.ts > now() - $1 AND e.asn IS NOT NULL "
-            "AND e.asn != '' "
-            "GROUP BY e.asn, e.org ORDER BY n DESC LIMIT 10", span)
+            f"SELECT e.asn, e.org, count(*) n "
+            f"FROM events ev JOIN ip_enrichment e ON e.src_ip = ev.src_ip "
+            f"WHERE ev.ts > now() - interval '{iv}' AND e.asn IS NOT NULL "
+            f"AND e.asn != '' "
+            f"GROUP BY e.asn, e.org ORDER BY n DESC LIMIT 10")
     return [dict(r) for r in rows]
 
 
