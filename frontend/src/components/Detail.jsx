@@ -15,9 +15,19 @@ function deriveRep(data) {
   return '—'
 }
 
+function providerHint(data) {
+  if (data.not_observed) return 'not observed'
+  if (data.rate_limited) return 'rate limited'
+  if (data.quota_exhausted) return 'quota exhausted'
+  if (data.source === 'feodo-blocklist' && !data.listed) return 'not on C2 list'
+  if (data.source === 'lapi' && !data.banned) return 'not locally banned'
+  if (data.source === 'none') return 'no key'
+  return ''
+}
+
 function IntelSources({ raw }) {
   if (!raw || typeof raw !== 'object') return null
-  const providers = Object.entries(raw).filter(([, v]) => v && !v.error)
+  const providers = Object.entries(raw).filter(([, v]) => v && typeof v === 'object' && !v.error)
   const errors = Object.entries(raw).filter(([, v]) => v && v.error)
   if (!providers.length && !errors.length) return null
   return (
@@ -29,12 +39,13 @@ function IntelSources({ raw }) {
           const rep = deriveRep(data)
           const score = data.abuseConfidenceScore ?? data.last_analysis_stats?.malicious ?? null
           const scoreLabel = score !== null ? ` · ${score}${data.abuseConfidenceScore !== undefined ? '%' : ' detections'}` : ''
-          const org = data.as_owner || data.isp || data.name || ''
+          const hint = rep === 'unknown' ? providerHint(data) : ''
+          const org = data.as_owner || data.isp || data.name || data.as_name || ''
           return (
             <tr key={name}>
               <td style={{ color: 'var(--text-dim)', width: 90 }}>{name}</td>
               <td style={{ color: REP_COLOR[rep] || REP_COLOR.unknown }}>{rep}</td>
-              <td className="muted">{scoreLabel}</td>
+              <td className="muted">{scoreLabel}{hint ? ` · ${hint}` : ''}</td>
               <td className="muted" style={{ maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }}>{org}</td>
             </tr>
           )
