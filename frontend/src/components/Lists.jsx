@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from 'react'
-import DOMPurify from 'dompurify'
 import { api } from '../lib/api.js'
 
 const fmt = (t) => new Date(t).toLocaleString()
@@ -60,24 +59,46 @@ export function Behavior({ onPick }) {
 
 export function Reports() {
   const [rows, setRows] = useState([])
-  const [html, setHtml] = useState('')
+  const [sel, setSel] = useState(null)
   useEffect(() => { api.reports().then(setRows).catch(() => {}) }, [])
+  const s = sel?.summary
   return (
     <div className="grid2">
       <div className="card"><h3><span>reports</span><span>{rows.length}</span></h3>
         <div className="body"><table>
           <thead><tr><th>created</th><th>kind</th><th>events</th><th></th><th></th></tr></thead>
           <tbody>{rows.map((r) => (
-            <tr key={r.id}><td className="muted">{fmt(r.created_at)}</td><td>{r.kind}</td>
+            <tr key={r.id} style={sel?.id === r.id ? { background: 'var(--card-hover)' } : {}}>
+              <td className="muted">{fmt(r.created_at)}</td><td>{r.kind}</td>
               <td>{r.summary?.events ?? '—'}</td>
-              <td><a onClick={() => api.report(r.id).then((d) => setHtml(d.html))}>view</a></td>
-              <td><a href={api.reportCsvUrl(r.id)} target="_blank" rel="noreferrer">export (csv)</a></td></tr>
+              <td><a onClick={() => setSel(r)}>view</a></td>
+              <td><a href={api.reportCsvUrl(r.id)} target="_blank" rel="noreferrer">csv</a></td></tr>
           ))}</tbody></table>
           {rows.length === 0 && <div className="muted">no reports yet — first daily report runs at 06:00 UTC</div>}
         </div></div>
-      <div className="card"><h3><span>preview</span></h3>
-        <div className="body" style={{ background: '#fff', borderRadius: 8, minHeight: 200 }}
-          dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(html || '<p style="color:#888;font-family:monospace;padding:12px">select a report</p>') }} />
+      <div className="card"><h3><span>{sel ? `${sel.kind} report — ${fmt(sel.created_at)}` : 'preview'}</span></h3>
+        <div className="body">
+          {!s && <div className="muted">select a report</div>}
+          {s && <>
+            <table>
+              <tbody>
+                <tr><td className="muted">events</td><td>{s.events?.toLocaleString() ?? '—'}</td></tr>
+                <tr><td className="muted">unique IPs</td><td>{s.unique_ips?.toLocaleString() ?? '—'}</td></tr>
+                <tr><td className="muted">scans</td><td>{s.scans?.toLocaleString() ?? '—'}</td></tr>
+                <tr><td className="muted">IPs blocked</td><td>{s.blocked_ips?.toLocaleString() ?? '0'}</td></tr>
+              </tbody>
+            </table>
+            {s.attacks_by_type?.length > 0 && <>
+              <h3 style={{ marginTop: 16 }}><span>attacks by type</span></h3>
+              <table>
+                <thead><tr><th>type</th><th>count</th></tr></thead>
+                <tbody>{s.attacks_by_type.map((a, i) => (
+                  <tr key={i}><td>{a.attack_type}</td><td>{a.n}</td></tr>
+                ))}</tbody>
+              </table>
+            </>}
+          </>}
+        </div>
       </div>
     </div>
   )
