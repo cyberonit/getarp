@@ -164,22 +164,7 @@ async def attack_map(request: Request):
 
 # ───────────────────────── WebSocket: push live events ─────────────────────────
 @app.websocket("/api/ws/status")
-async def ws_status(ws: WebSocket, ticket: str = Query(...)):
-    # Single-use ticket from /api/auth/ws-ticket — consumed on connect,
-    # never logged in URLs or leaked via Referer.
-    ticket_key = f"ws:ticket:{ticket}"
-    raw = await R.get(ticket_key)
-    if not raw:
-        await ws.close(code=4401)
-        return
-    await R.delete(ticket_key)
-    try:
-        payload = json.loads(raw)
-        if not payload.get("sub"):
-            raise ValueError
-    except (json.JSONDecodeError, ValueError):
-        await ws.close(code=4401)
-        return
+async def ws_status(ws: WebSocket):
     await ws.accept()
     pubsub = R.pubsub()
     await pubsub.subscribe(STATUS_CHANNEL)

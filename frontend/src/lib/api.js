@@ -65,12 +65,9 @@ export const api = {
     return r.json()
   },
 
-  async liveSocket(onMsg) {
+  liveSocket(onMsg) {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const r = await fetch(BASE + '/auth/ws-ticket', { method: 'POST', headers: authHeaders() })
-    if (!r.ok) return null
-    const { ticket } = await r.json()
-    const url = `${proto}://${location.host}${BASE}/ws/status?ticket=${encodeURIComponent(ticket)}`
+    const url = `${proto}://${location.host}${BASE}/ws/status`
     const ws = new WebSocket(url)
     ws.onmessage = (e) => { try { onMsg(JSON.parse(e.data)) } catch {} }
     return ws
