@@ -94,7 +94,7 @@ services:
   # ──────────────────── INTEL + ENFORCEMENT (CrowdSec) ────────────────────
   # CrowdSec LAPI — detection engine + community CTI sync (needs egress_net for CAPI)
   crowdsec:
-    image: crowdsecurity/crowdsec:v1.6
+    image: crowdsecurity/crowdsec:v1.7.8
     restart: unless-stopped
     networks: [data_net, egress_net]    # data_net: talks to nothing on internet;
                                         # egress_net: pulls collections + syncs CAPI
@@ -138,7 +138,7 @@ services:
     logging: *default-logging
 
   postgres:
-    image: timescale/timescaledb:2.17.2-pg16
+    image: timescale/timescaledb:2.27.2-pg16
     restart: unless-stopped
     networks: [data_net]
     environment:
@@ -154,7 +154,7 @@ services:
       - pgdata:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$PG_USER -d $$PG_DB"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
       retries: 20
