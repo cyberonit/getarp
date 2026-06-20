@@ -15,19 +15,9 @@ function deriveRep(data) {
   return '—'
 }
 
-function providerHint(data) {
-  if (data.not_observed) return 'not observed'
-  if (data.rate_limited) return 'rate limited'
-  if (data.quota_exhausted) return 'quota exhausted'
-  if (data.source === 'feodo-blocklist' && !data.listed) return 'not on C2 list'
-  if (data.source === 'lapi' && !data.banned) return 'not locally banned'
-  if (data.source === 'none') return 'no key'
-  return ''
-}
-
 function IntelSources({ raw }) {
   if (!raw || typeof raw !== 'object') return null
-  const providers = Object.entries(raw).filter(([, v]) => v && typeof v === 'object' && !v.error)
+  const providers = Object.entries(raw).filter(([, v]) => v && !v.error)
   const errors = Object.entries(raw).filter(([, v]) => v && v.error)
   if (!providers.length && !errors.length) return null
   return (
@@ -39,13 +29,12 @@ function IntelSources({ raw }) {
           const rep = deriveRep(data)
           const score = data.abuseConfidenceScore ?? data.last_analysis_stats?.malicious ?? null
           const scoreLabel = score !== null ? ` · ${score}${data.abuseConfidenceScore !== undefined ? '%' : ' detections'}` : ''
-          const hint = rep === 'unknown' ? providerHint(data) : ''
-          const org = data.as_owner || data.isp || data.name || data.as_name || ''
+          const org = data.as_owner || data.isp || data.name || ''
           return (
             <tr key={name}>
               <td style={{ color: 'var(--text-dim)', width: 90 }}>{name}</td>
               <td style={{ color: REP_COLOR[rep] || REP_COLOR.unknown }}>{rep}</td>
-              <td className="muted">{scoreLabel}{hint ? ` · ${hint}` : ''}</td>
+              <td className="muted">{scoreLabel}</td>
               <td className="muted" style={{ maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }}>{org}</td>
             </tr>
           )
@@ -63,10 +52,10 @@ function IntelSources({ raw }) {
 
 export default function Detail({ ip, onClose }) {
   const [d, setD] = useState(null)
-  const [err, setErr] = useState(null)
+  const [err, setErr] = useState(false)
   useEffect(() => {
-    setD(null); setErr(null)
-    api.ipDetail(ip).then(setD).catch((e) => setErr(e.message === '401' ? 'auth' : 'load'))
+    setD(null); setErr(false)
+    api.ipDetail(ip).then(setD).catch(() => setErr(true))
   }, [ip])
 
   return (
@@ -75,8 +64,7 @@ export default function Detail({ ip, onClose }) {
       <div className="drawer">
         <span className="close" onClick={onClose}>[ close ]</span>
         <h2>{ip}</h2>
-        {err === 'auth' && <div className="muted">sign in to view IP details</div>}
-        {err === 'load' && <div className="muted">failed to load IP detail</div>}
+        {err && <div className="muted">failed to load IP detail</div>}
         {!d && !err && <div className="muted">loading…</div>}
         {d && (() => {
           const info = d.info || {}

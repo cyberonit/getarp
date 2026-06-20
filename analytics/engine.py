@@ -45,7 +45,7 @@ class Engine:
         self.r = r
         self.settings = settings
         self.detectors = load_detectors(
-            str(settings.get("ENABLED_DETECTORS", "scan,attack")).strip('"'), settings)
+            settings.get("ENABLED_DETECTORS", "scan,attack"), settings)
         self.profiler = BehavioralProfiler(settings)
         self.windows: dict[str, deque] = defaultdict(lambda: deque(maxlen=2000))
         self.profiles: dict[str, dict] = defaultdict(dict)
@@ -87,9 +87,7 @@ class Engine:
                     f.src_ip, f.scan_type, f.ports or [], len(f.ports or []),
                     f.detail.get("window_s"), json.dumps(f.detail))
                 await con.execute(
-                    "UPDATE ips SET classification = CASE "
-                    "  WHEN classification IN ('exploiter','intruder') THEN classification "
-                    "  ELSE 'scanner' END, "
+                    "UPDATE ips SET classification='scanner', "
                     "threat_score=GREATEST(threat_score,30) WHERE src_ip=$1", f.src_ip)
             elif f.kind == "attack":
                 await con.execute(
@@ -295,7 +293,7 @@ class Engine:
                 "SELECT attack_type, count(*) n FROM attack_events "
                 "WHERE ts > now()-$1::interval GROUP BY attack_type ORDER BY n DESC", span)
             top = await con.fetch(
-                "SELECT host(i.src_ip) AS src_ip, i.threat_score, i.classification, e.country, e.asn, e.org "
+                "SELECT i.src_ip, i.threat_score, i.classification, e.country, e.asn, e.org "
                 "FROM ips i LEFT JOIN ip_enrichment e ON e.src_ip=i.src_ip "
                 "WHERE i.last_seen > now()-$1::interval "
                 "ORDER BY i.threat_score DESC LIMIT 20", span)

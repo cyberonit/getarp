@@ -8,17 +8,15 @@ from base import Enrichment, EnrichmentProvider, _REGISTRY, register
 
 @register
 class CrowdSecProvider(EnrichmentProvider):
-    """Checks the local CrowdSec LAPI first, then falls back to the CrowdSec
-    CTI smoke API when CROWDSEC_CTI_KEY is configured."""
+    """Periodically pulls all active decisions from the local CrowdSec LAPI and
+    does in-memory lookups.  Zero external API calls."""
     name = "crowdsec"
     _TTL = 300
-    _CTI_URL = "https://cti.api.crowdsec.net/v2/smoke/"
 
     def __init__(self, settings: dict):
         super().__init__(settings)
         self._lapi = settings.get("CROWDSEC_LAPI_URL", "http://crowdsec:8080")
         self._key = settings.get("CROWDSEC_BOUNCER_KEY", "")
-        self._cti_key = settings.get("CROWDSEC_CTI_KEY", "")
         self._decisions: dict[str, list[str]] = {}
         self._last_fetch: float = 0.0
         self._lock = asyncio.Lock()
@@ -28,8 +26,9 @@ class CrowdSecProvider(EnrichmentProvider):
             if time.time() - self._last_fetch < self._TTL:
                 return
             try:
-                resp = await self.http().get(f"{self._lapi}/v1/decisions",
-                                            headers={"X-Api-Key": self._key})
+                async with httpx.AsyncClient(timeout=10) as c:
+                    resp = await c.get(f"{self._lapi}/v1/decisions",
+                                       headers={"X-Api-Key": self._key})
                 raw = resp.json() or []
                 local = [d for d in raw if d.get("origin") != "CAPI"]
                 new: dict[str, list[str]] = {}
@@ -39,66 +38,26 @@ class CrowdSecProvider(EnrichmentProvider):
                         new.setdefault(ip, []).append(d.get("scenario", ""))
                 self._decisions = new
                 print(f"[crowdsec] refreshed: {len(new)} banned IPs", flush=True)
-                self._last_fetch = time.time()
             except Exception as ex:
                 print(f"[crowdsec] refresh failed: {ex}", flush=True)
-
-    async def _cti_lookup(self, ip: str) -> Enrichment | None:
-        if not self._cti_key:
-            return None
-        try:
-            resp = await self.http().get(
-                self._CTI_URL + ip,
-                headers={"x-api-key": self._cti_key})
-            if resp.status_code == 404:
-                return None
-            if resp.status_code == 429:
-                return None
-            resp.raise_for_status()
-            d = resp.json()
-            e = Enrichment(src_ip=ip, provider=self.name)
-            e.raw = d
-            scores = d.get("scores", {}).get("overall", {})
-            total = scores.get("total", 0)
-            e.confidence = min(total / 5.0, 1.0)
-            e.is_known_attacker = total >= 3
-            e.reputation = ("malicious" if total >= 3 else
-                            "suspicious" if total >= 1 else "clean")
-            loc = d.get("location") or {}
-            e.country = loc.get("country")
-            e.asn = str(d.get("as_num", "") or "")
-            e.org = d.get("as_name")
-            cls = d.get("classifications", {})
-            cats = [c.get("name") for c in cls.get("classifications", []) if c.get("name")]
-            cats += [b.get("name") for b in cls.get("behaviors", []) if b.get("name")]
-            e.categories = cats or []
-            return e
-        except Exception as ex:
-            print(f"[crowdsec] CTI lookup failed for {ip}: {ex}", flush=True)
-            return None
+            self._last_fetch = time.time()
 
     async def enrich(self, ip: str) -> Enrichment:
         e = Enrichment(src_ip=ip, provider=self.name)
-        if not self._key and not self._cti_key:
-            e.categories = ["no-keys-configured"]
-            e.raw = {"source": "none", "reason": "set CROWDSEC_BOUNCER_KEY or CROWDSEC_CTI_KEY"}
+        if not self._key:
+            e.categories = ["bouncer-key-missing"]
             return e
-        if self._key:
-            if time.time() - self._last_fetch >= self._TTL:
-                await self._refresh()
-            scenarios = self._decisions.get(ip)
-            if scenarios:
-                e.reputation = "malicious"
-                e.is_known_attacker = True
-                e.confidence = 0.9
-                e.categories = list({s for s in scenarios if s})
-                e.raw = {"source": "lapi", "banned": True, "scenarios": scenarios}
-                return e
-        cti = await self._cti_lookup(ip)
-        if cti:
-            return cti
-        e.reputation = "unknown"
-        e.raw = {"source": "lapi", "banned": False, "scenarios": []}
+        if time.time() - self._last_fetch >= self._TTL:
+            await self._refresh()
+        scenarios = self._decisions.get(ip)
+        if scenarios:
+            e.reputation = "malicious"
+            e.is_known_attacker = True
+            e.confidence = 0.9
+            e.categories = list({s for s in scenarios if s})
+        else:
+            e.reputation = "unknown"
+        e.raw = {"banned": bool(scenarios), "scenarios": scenarios or []}
         return e
 
 
@@ -114,9 +73,10 @@ class AbuseIPDBProvider(EnrichmentProvider):
             e.categories = ["api-key-missing"]
             return e
         try:
-            resp = await self.http(timeout=8).get(
-                self.URL, headers={"Key": key, "Accept": "application/json"},
-                params={"ipAddress": ip, "maxAgeInDays": 90})
+            async with httpx.AsyncClient(timeout=8) as c:
+                resp = await c.get(self.URL,
+                                   headers={"Key": key, "Accept": "application/json"},
+                                   params={"ipAddress": ip, "maxAgeInDays": 90})
             resp.raise_for_status()
             d = resp.json().get("data", {})
             e.raw = d
@@ -173,7 +133,8 @@ class GreyNoiseProvider(EnrichmentProvider):
         key = self.settings.get("GREYNOISE_KEY")
         headers = {"key": key} if key else {}
         try:
-            resp = await self.http(timeout=8).get(self.URL + ip, headers=headers)
+            async with httpx.AsyncClient(timeout=8) as c:
+                resp = await c.get(self.URL + ip, headers=headers)
             if resp.status_code == 429:
                 retry = int(resp.headers.get("Retry-After", self._COOLDOWN))
                 self._rate_limited_until = now + retry
@@ -181,8 +142,7 @@ class GreyNoiseProvider(EnrichmentProvider):
                 e.raw = {"rate_limited": True, "retry_after": retry}
                 return e
             if resp.status_code == 404:
-                e.reputation = "unknown"
-                e.raw = {"not_observed": True}
+                e.reputation = "clean"
                 self._cache_put(ip, e)
                 return e
             resp.raise_for_status()
@@ -272,7 +232,8 @@ class VirusTotalProvider(EnrichmentProvider):
                 await asyncio.sleep(self._MIN_REQUEST_INTERVAL - elapsed)
 
             try:
-                resp = await self.http().get(self.URL + ip, headers={"x-apikey": key})
+                async with httpx.AsyncClient(timeout=10) as c:
+                    resp = await c.get(self.URL + ip, headers={"x-apikey": key})
                 self._last_request = time.time()
                 self._daily_count += 1
 
@@ -353,8 +314,8 @@ class AbusechProvider(EnrichmentProvider):
             text = None
             for attempt in range(4):
                 try:
-                    resp = await self.http(timeout=30).get(
-                        self._BLOCKLIST_URL, follow_redirects=True)
+                    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
+                        resp = await c.get(self._BLOCKLIST_URL)
                     if resp.status_code == 200 and resp.text.strip():
                         text = resp.text
                         break
@@ -383,12 +344,13 @@ class AbusechProvider(EnrichmentProvider):
             return e
         # fall through to ThreatFox API
         try:
-            resp = await self.http(timeout=30).post(
-                self._THREATFOX_URL,
-                headers={"Auth-Key": self._key},
-                json={"query": "search_ioc", "search_term": ip, "exact_match": True},
-            )
-            resp.raise_for_status()
+            async with httpx.AsyncClient(timeout=30) as c:
+                resp = await c.post(
+                    self._THREATFOX_URL,
+                    headers={"Auth-Key": self._key},
+                    json={"query": "search_ioc", "search_term": ip, "exact_match": True},
+                )
+                resp.raise_for_status()
             data = resp.json()
             e.raw = data
             hits = data.get("data") if isinstance(data.get("data"), list) else []
@@ -418,12 +380,8 @@ class AbusechProvider(EnrichmentProvider):
             e.is_known_attacker = True
             e.confidence = 0.9
             e.categories = ["feodo-c2"]
-            e.raw = {"source": "feodo-blocklist", "listed": True,
-                     "blocklist_size": len(self._blacklist)}
         else:
             e.reputation = "unknown"
-            e.raw = {"source": "feodo-blocklist", "listed": False,
-                     "blocklist_size": len(self._blacklist)}
         return e
 
 
