@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useRef } from 'react'
 import { api } from '../lib/api.js'
 
 export function Login({ onDone }) {
@@ -48,10 +48,145 @@ export function Settings() {
             ))}</tbody></table>
           {msg && <div className="muted" style={{ marginTop: 10 }}>{msg}</div>}
         </div></div>
+      <ServiceLogs />
+      <ServiceUpdates />
       <LiveTraffic />
       <BlockedIPs />
       <CrowdSecConsole />
     </>
+  )
+}
+
+function ServiceLogs() {
+  const [services, setServices] = useState([])
+  const [selected, setSelected] = useState('')
+  const [lines, setLines] = useState(150)
+  const [log, setLog] = useState('')
+  const [err, setErr] = useState('')
+  const [loading, setLoading] = useState(false)
+  const logRef = useRef(null)
+
+  useEffect(() => {
+    api.dockerServices()
+      .then((svc) => { setServices(svc); if (svc.length && !selected) setSelected(svc[0].name) })
+      .catch(() => setErr('Could not load services.'))
+  }, [])
+
+  const load = () => {
+    if (!selected) return
+    setLoading(true); setErr('')
+    api.dockerLogs(selected, lines)
+      .then((d) => { setLog(d.log || ''); setLoading(false) })
+      .catch(() => { setErr('Could not load logs.'); setLoading(false) })
+  }
+
+  useEffect(() => { if (selected) load() }, [selected, lines])
+  useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight }, [log])
+
+  return (
+    <div className="card"><h3><span>service logs</span>
+      <span>
+        <select value={selected} onChange={(e) => setSelected(e.target.value)}
+          style={{ marginRight: 10 }}>
+          {services.map((s) => (
+            <option key={s.name} value={s.name}>{s.name} ({s.status})</option>
+          ))}
+        </select>
+        {[150, 500, 1000].map((n) => (
+          <a key={n} onClick={() => setLines(n)}
+            style={{ marginLeft: 8, fontWeight: n === lines ? 'bold' : 'normal' }}>{n}</a>
+        ))}
+        <a onClick={load} style={{ marginLeft: 12 }}>{loading ? 'loading...' : 'refresh'}</a>
+      </span>
+    </h3>
+      <div className="body">
+        <p className="muted">Docker container logs for troubleshooting. Select a service and line count.</p>
+        <div ref={logRef} className="log-viewer">
+          {log || (loading ? 'Loading...' : 'No log output.')}
+        </div>
+        {err && <div className="err" style={{ marginTop: 10 }}>{err}</div>}
+      </div></div>
+  )
+}
+
+function ServiceUpdates() {
+  const [versions, setVersions] = useState([])
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState({})
+  const [msgs, setMsgs] = useState({})
+
+  const load = () => {
+    setErr('')
+    api.dockerVersions()
+      .then(setVersions)
+      .catch(() => setErr('Could not load service versions.'))
+  }
+
+  useEffect(load, [])
+
+  const setMsg = (svc, msg) => setMsgs((p) => ({ ...p, [svc]: msg }))
+  const setBusyFlag = (svc, v) => setBusy((p) => ({ ...p, [svc]: v }))
+
+  const pull = async (svc) => {
+    setBusyFlag(svc, true); setMsg(svc, '')
+    try {
+      const r = await api.dockerPull(svc)
+      setMsg(svc, r.note || 'Done.')
+      load()
+    } catch (e) { setMsg(svc, e.message) }
+    setBusyFlag(svc, false)
+  }
+
+  const rollback = async (svc) => {
+    setBusyFlag(svc, true); setMsg(svc, '')
+    try {
+      const r = await api.dockerRollback(svc)
+      setMsg(svc, r.note || 'Rolled back.')
+      load()
+    } catch (e) { setMsg(svc, e.message) }
+    setBusyFlag(svc, false)
+  }
+
+  const restart = async (svc) => {
+    setBusyFlag(svc, true); setMsg(svc, '')
+    try {
+      const r = await api.dockerRestart(svc)
+      setMsg(svc, r.note || `Restarted (${r.status}).`)
+      load()
+    } catch (e) { setMsg(svc, e.message) }
+    setBusyFlag(svc, false)
+  }
+
+  return (
+    <div className="card"><h3><span>service updates</span>
+      <span><a onClick={load}>refresh</a></span>
+    </h3>
+      <div className="body">
+        <p className="muted">Docker images for all services. Pull the latest image, restart,
+          or rollback to the previous version.</p>
+        <table><thead><tr>
+          <th>service</th><th>image</th><th>image id</th><th>status</th><th>actions</th>
+        </tr></thead>
+          <tbody>{versions.map((v) => (
+            <tr key={v.service}>
+              <td>{v.service}</td>
+              <td className="muted">{v.image}</td>
+              <td className="muted">{v.image_short_id}</td>
+              <td><span className={`tag ${v.status === 'running' ? 'scanner' : ''}`}>{v.status}</span></td>
+              <td className="update-actions">
+                <a onClick={() => pull(v.service)}
+                  className={busy[v.service] ? 'disabled' : ''}>pull</a>
+                <a onClick={() => restart(v.service)}
+                  className={busy[v.service] ? 'disabled' : ''}>restart</a>
+                <a onClick={() => rollback(v.service)}
+                  className={`rollback ${busy[v.service] ? 'disabled' : ''}`}>rollback</a>
+                {msgs[v.service] && <span className="muted" style={{ marginLeft: 8 }}>{msgs[v.service]}</span>}
+              </td>
+            </tr>
+          ))}</tbody></table>
+        {versions.length === 0 && !err && <div className="muted">loading...</div>}
+        {err && <div className="err" style={{ marginTop: 10 }}>{err}</div>}
+      </div></div>
   )
 }
 

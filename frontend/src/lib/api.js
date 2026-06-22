@@ -54,6 +54,31 @@ export const api = {
   crowdsecOverview: () => get('/admin/crowdsec/overview'),
   crowdsecDecisions: () => get('/admin/crowdsec/decisions'),
 
+  dockerServices: () => get('/admin/docker/services'),
+  dockerLogs: (service, lines = 150) => get(`/admin/docker/logs/${service}?lines=${lines}`),
+  dockerVersions: () => get('/admin/docker/versions'),
+  async dockerPull(service) {
+    const r = await fetch(BASE + `/admin/docker/pull/${service}`, {
+      method: 'POST', headers: authHeaders(),
+    })
+    if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || 'pull failed') }
+    return r.json()
+  },
+  async dockerRollback(service) {
+    const r = await fetch(BASE + `/admin/docker/rollback/${service}`, {
+      method: 'POST', headers: authHeaders(),
+    })
+    if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || 'rollback failed') }
+    return r.json()
+  },
+  async dockerRestart(service) {
+    const r = await fetch(BASE + `/admin/docker/restart/${service}`, {
+      method: 'POST', headers: authHeaders(),
+    })
+    if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || 'restart failed') }
+    return r.json()
+  },
+
   settings: () => get('/admin/settings'),
   async saveSetting(key, value) {
     const r = await fetch(BASE + '/admin/settings', {
