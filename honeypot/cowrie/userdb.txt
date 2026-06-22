@@ -1,4 +1,4 @@
-# Cowrie userdb — which login attempts "succeed" so we can watch post-auth behaviour.
+# Cowrie userdb - which login attempts "succeed" so we can watch post-auth behaviour.
 # Format: username:x:password   ('*' = any, '!word' = deny that word)
 # We let common weak creds through to capture what attackers DO after login.
 root:x:!root
