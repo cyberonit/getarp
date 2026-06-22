@@ -8,3 +8,4 @@ bcrypt==4.0.1          # pin: passlib 1.7.4 can't read bcrypt>=4.1 version metad
 python-multipart==0.0.9
 httpx==0.27.0
 slowapi==0.1.9
+docker>=7.0.0

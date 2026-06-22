@@ -154,6 +154,24 @@ label { font-family: var(--mono); font-size: 11px; color: var(--text-dim);
 .kv .key { color: var(--text-faint); }
 .close { float:right; cursor:pointer; color: var(--text-dim); font-family:var(--mono); }
 
+/* ── log viewer ── */
+.log-viewer {
+  background: var(--ink); border: 1px solid var(--line); border-radius: 8px;
+  padding: 12px 14px; font-family: var(--mono); font-size: 11.5px; line-height: 1.6;
+  color: var(--text-dim); max-height: 420px; overflow-y: auto; white-space: pre-wrap;
+  word-break: break-all;
+}
+select {
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+  font-family: var(--mono); font-size: 11px; padding: 5px 8px; border-radius: 6px;
+}
+
+/* ── update actions ── */
+.update-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.update-actions a { font-size: 11px; cursor: pointer; }
+.update-actions a.disabled { opacity: .4; pointer-events: none; }
+.update-actions a.rollback { color: var(--warn); }
+
 .muted { color: var(--text-dim); font-family: var(--mono); font-size: 12px; }
 /* ── tablet (≤ 900px) ── */
 @media (max-width: 900px) {

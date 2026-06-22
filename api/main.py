@@ -20,7 +20,7 @@ from slowapi.middleware import SlowAPIMiddleware
 
 import db
 import auth
-from routers import data, admin, crowdsec, honeypot
+from routers import data, admin, crowdsec, honeypot, docker_ops
 
 limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
 
@@ -42,6 +42,7 @@ app.include_router(data.router)
 app.include_router(admin.router)
 app.include_router(crowdsec.router)
 app.include_router(honeypot.router)
+app.include_router(docker_ops.router)
 
 R = None
 STATUS_CHANNEL = "status:live"
