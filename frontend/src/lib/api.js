@@ -95,6 +95,7 @@ export const api = {
     const url = `${proto}://${location.host}${BASE}/ws/status`
     const ws = new WebSocket(url)
     ws.onmessage = (e) => { try { onMsg(JSON.parse(e.data)) } catch {} }
+    ws.onerror = () => {}
     return ws
   },
 }
