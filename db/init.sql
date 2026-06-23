@@ -145,7 +145,7 @@ CREATE TABLE settings (
 INSERT INTO settings(key, value) VALUES
   ('enrichment_provider', '"crowdsec"'),
   ('scan_port_threshold', '5'),
-  ('bruteforce_threshold', '10'),
+  ('bruteforce_threshold', '5'),
   ('status_interval_seconds', '300')
 ON CONFLICT DO NOTHING;
 
