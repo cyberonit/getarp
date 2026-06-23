@@ -12,7 +12,7 @@ class AttackDetector(Detector):
 
     def __init__(self, settings):
         super().__init__(settings)
-        self.bf_threshold = int(settings.get("BRUTEFORCE_THRESHOLD", 10))
+        self.bf_threshold = int(settings.get("BRUTEFORCE_THRESHOLD", 5))
         self.bf_window = int(settings.get("BRUTEFORCE_WINDOW_SECONDS", 120))
         self._reported: dict[str, float] = {}
 
