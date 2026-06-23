@@ -59,7 +59,7 @@ export function Settings() {
 
 function ServiceLogs() {
   const [services, setServices] = useState([])
-  const [selected, setSelected] = useState('')
+  const [selected, setSelected] = useState('__all__')
   const [lines, setLines] = useState(150)
   const [log, setLog] = useState('')
   const [err, setErr] = useState('')
@@ -68,19 +68,31 @@ function ServiceLogs() {
 
   useEffect(() => {
     api.dockerServices()
-      .then((svc) => { setServices(svc); if (svc.length && !selected) setSelected(svc[0].name) })
+      .then((svc) => setServices(svc))
       .catch(() => setErr('Could not load services.'))
   }, [])
 
   const load = () => {
     if (!selected) return
     setLoading(true); setErr('')
-    api.dockerLogs(selected, lines)
-      .then((d) => { setLog(d.log || ''); setLoading(false) })
-      .catch(() => { setErr('Could not load logs.'); setLoading(false) })
+    if (selected === '__all__') {
+      Promise.all(services.map((s) => api.dockerLogs(s.name, lines).catch(() => ({ log: '' }))))
+        .then((results) => {
+          const combined = results
+            .map((d, i) => (d.log || '').split('\n').filter(Boolean)
+              .map((l) => `[${services[i].name}] ${l}`).join('\n'))
+            .filter(Boolean).join('\n')
+          setLog(combined); setLoading(false)
+        })
+        .catch(() => { setErr('Could not load logs.'); setLoading(false) })
+    } else {
+      api.dockerLogs(selected, lines)
+        .then((d) => { setLog(d.log || ''); setLoading(false) })
+        .catch(() => { setErr('Could not load logs.'); setLoading(false) })
+    }
   }
 
-  useEffect(() => { if (selected) load() }, [selected, lines])
+  useEffect(() => { if (selected && (selected !== '__all__' || services.length)) load() }, [selected, lines, services])
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight }, [log])
 
   return (
@@ -88,6 +100,7 @@ function ServiceLogs() {
       <span>
         <select value={selected} onChange={(e) => setSelected(e.target.value)}
           style={{ marginRight: 10 }}>
+          <option value="__all__">all logs</option>
           {services.map((s) => (
             <option key={s.name} value={s.name}>{s.name} ({s.status})</option>
           ))}
