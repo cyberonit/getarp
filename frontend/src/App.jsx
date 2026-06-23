@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { Component, useState } from 'react'
 import { api } from './lib/api.js'
 import Dashboard from './components/Dashboard.jsx'
 import Detail from './components/Detail.jsx'
@@ -25,6 +25,24 @@ function Contact() {
   )
 }
 
+class ErrorBoundary extends Component {
+  state = { error: null, info: null }
+  static getDerivedStateFromError(error) { return { error } }
+  componentDidCatch(error, info) { this.setState({ info }) }
+  render() {
+    if (this.state.error) return (
+      <div style={{ padding: 40, color: '#f87171', fontFamily: 'monospace', whiteSpace: 'pre-wrap', fontSize: 12 }}>
+        <h2>something broke</h2>
+        <pre>{this.state.error.message}</pre>
+        <pre>{this.state.error.stack}</pre>
+        <pre>{this.state.info?.componentStack}</pre>
+        <button onClick={() => this.setState({ error: null, info: null })}>retry</button>
+      </div>
+    )
+    return this.props.children
+  }
+}
+
 const AUTH_VIEWS = ['settings']
 
 export default function App() {
@@ -36,6 +54,7 @@ export default function App() {
   if (needsAuth && !authed) return <Login onDone={() => setAuthed(true)} />
 
   return (
+    <ErrorBoundary>
     <div className="shell">
       <nav className="rail">
         <div className="brand"><b>getarp</b> grid<small>deception intel</small></div>
@@ -67,5 +86,6 @@ export default function App() {
 
       {pick && <Detail ip={pick} onClose={() => setPick(null)} />}
     </div>
+    </ErrorBoundary>
   )
 }

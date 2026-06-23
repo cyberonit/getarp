@@ -208,7 +208,7 @@ function LiveTraffic() {
   const [limit, setLimit] = useState(20)
   const [err, setErr] = useState('')
   const load = () => api.latestEvents(limit).then(setEvents).catch(() => setErr('Could not load events.'))
-  useEffect(load, [limit])
+  useEffect(() => { load() }, [limit])
   return (
     <div className="card"><h3><span>live honeypot traffic</span>
       <span>
@@ -242,7 +242,7 @@ function BlockedIPs() {
   const [rows, setRows] = useState([])
   const [err, setErr] = useState('')
   const load = () => api.crowdsecDecisions().then(setRows).catch(() => setErr('Could not reach CrowdSec LAPI.'))
-  useEffect(load, [])
+  useEffect(() => { load() }, [])
   return (
     <div className="card"><h3><span>blocked IPs (nftables)</span><span>{rows.length} active bans</span></h3>
       <div className="body" style={{ maxHeight: 420, overflowY: 'auto' }}>
