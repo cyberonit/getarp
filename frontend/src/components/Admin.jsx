@@ -135,7 +135,7 @@ function ServiceUpdates() {
       .catch(() => setErr('Could not load service versions.'))
   }
 
-  useEffect(load, [])
+  useEffect(() => { load() }, [])
 
   const setMsg = (svc, msg) => setMsgs((p) => ({ ...p, [svc]: msg }))
   const setBusyFlag = (svc, v) => setBusy((p) => ({ ...p, [svc]: v }))
@@ -207,7 +207,7 @@ function LiveTraffic() {
   const [events, setEvents] = useState([])
   const [limit, setLimit] = useState(20)
   const [err, setErr] = useState('')
-  const load = () => api.latestEvents(limit).then(setEvents).catch(() => setErr('Could not load events.'))
+  const load = () => { api.latestEvents(limit).then(setEvents).catch(() => setErr('Could not load events.')) }
   useEffect(() => { load() }, [limit])
   return (
     <div className="card"><h3><span>live honeypot traffic</span>
@@ -241,7 +241,7 @@ function LiveTraffic() {
 function BlockedIPs() {
   const [rows, setRows] = useState([])
   const [err, setErr] = useState('')
-  const load = () => api.crowdsecDecisions().then(setRows).catch(() => setErr('Could not reach CrowdSec LAPI.'))
+  const load = () => { api.crowdsecDecisions().then(setRows).catch(() => setErr('Could not reach CrowdSec LAPI.')) }
   useEffect(() => { load() }, [])
   return (
     <div className="card"><h3><span>blocked IPs (nftables)</span><span>{rows.length} active bans</span></h3>
