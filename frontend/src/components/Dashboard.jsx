@@ -115,12 +115,11 @@ export default function Dashboard({ onPick }) {
         <div>
           <div className="card geo">
             <h3><span>top countries</span>
-              <span>
+              <select value={cWindow} onChange={(e) => setCWindow(e.target.value)}>
                 {AS_WINDOWS.map(([k, label]) => (
-                  <a key={k} onClick={() => setCWindow(k)}
-                    style={{ marginLeft: 8, fontWeight: k === cWindow ? 'bold' : 'normal' }}>{label}</a>
+                  <option key={k} value={k}>{label}</option>
                 ))}
-              </span>
+              </select>
             </h3>
             <div className="body">
               {countries.length === 0 && <div className="muted">no enriched origins yet</div>}
@@ -136,12 +135,11 @@ export default function Dashboard({ onPick }) {
 
           <div className="card" style={{ marginTop: 18 }}>
             <h3><span>top AS</span>
-              <span>
+              <select value={asWindow} onChange={(e) => setAsWindow(e.target.value)}>
                 {AS_WINDOWS.map(([k, label]) => (
-                  <a key={k} onClick={() => setAsWindow(k)}
-                    style={{ marginLeft: 8, fontWeight: k === asWindow ? 'bold' : 'normal' }}>{label}</a>
+                  <option key={k} value={k}>{label}</option>
                 ))}
-              </span>
+              </select>
             </h3>
             <div className="body">
               {topAS.length === 0 && <div className="muted">no enriched events in this window</div>}
