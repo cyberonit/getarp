@@ -258,7 +258,6 @@ if command -v ufw &>/dev/null; then
     ufw allow "$MGMT_PORT/tcp"  comment 'admin ssh'
     ufw allow 443/tcp           comment 'dashboard TLS'
     ufw allow 22/tcp            comment 'honeypot SSH'
-    ufw allow 23/tcp            comment 'honeypot Telnet'
     ufw allow 80/tcp            comment 'honeypot HTTP'
     ufw allow 21/tcp            comment 'honeypot FTP'
     ufw allow 3306/tcp          comment 'honeypot MySQL'
