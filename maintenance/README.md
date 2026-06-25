@@ -31,3 +31,26 @@ bash maintenance/check-updates.sh --apply
 4. Rebuild containers: `make build`
 
 > Suricata rules can also be updated independently with `make rules`.
+
+## Scheduled runs
+
+A crontab entry runs the dry-run automatically on the **1st of every month at 08:00**:
+
+```
+0 8 1 * * bash /home/getarp-intel/maintenance/check-updates.sh >> /home/getarp-intel/maintenance/logs/updates-$(date +%Y-%m).log 2>&1
+```
+
+Logs are written to `maintenance/logs/updates-YYYY-MM.log` (one file per month, excluded from git).
+
+To review the latest log:
+
+```bash
+cat maintenance/logs/updates-$(date +%Y-%m).log
+```
+
+To apply updates after reviewing:
+
+```bash
+bash maintenance/check-updates.sh --apply
+make build
+```
