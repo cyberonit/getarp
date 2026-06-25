@@ -13,7 +13,7 @@ public dashboard with an authenticated admin backend — on a single VM.
 
 | Layer | Component | Where |
 |---|---|---|
-| Deception | Cowrie (SSH/Telnet) + multi-service emulator (HTTP, fake MySQL, FTP, Redis) | `honeypot/` |
+| Deception | Cowrie (SSH) + multi-service emulator (HTTP, fake MySQL, FTP, Redis) | `honeypot/` |
 | Detection | Suricata IDS + custom honeypot rules | `ids/` |
 | Intel + enforcement | CrowdSec + nftables firewall bouncer (host service) | `crowdsec/` |
 | Ingest | Pipeline: normalize → Redis Streams + TimescaleDB | `pipeline/` |
@@ -32,7 +32,7 @@ public dashboard with an authenticated admin backend — on a single VM.
 
 | Port(s) | Purpose |
 |---|---|
-| 22, 23 | Honeypot SSH / Telnet (Cowrie) |
+| 22 | Honeypot SSH (Cowrie) |
 | 80, 8081 | Honeypot HTTP |
 | 21 | Honeypot FTP |
 | 3306 | Honeypot fake MySQL |
