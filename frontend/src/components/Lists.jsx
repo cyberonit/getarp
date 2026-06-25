@@ -20,29 +20,112 @@ export function Scans({ onPick }) {
   )
 }
 
+const WINDOWS = [['1h', '1 h'], ['24h', '24 h'], ['7d', '7 d'], ['30d', '30 d'], ['1y', '1 y']]
+const ATTACK_GROUPS = [['', 'None'], ['service', 'Service'], ['as', 'AS']]
+
 export function Attacks({ onPick }) {
   const [rows, setRows] = useState([])
-  useEffect(() => { api.attacks().then(setRows).catch(() => {}) }, [])
+  const [window, setWindow] = useState('24h')
+  const [groupBy, setGroupBy] = useState('')
+  useEffect(() => {
+    let cancelled = false
+    api.attacks(window, groupBy).then((d) => { if (!cancelled) setRows(d) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [window, groupBy])
+
+  const grouped = groupBy !== ''
   return (
-    <div className="card"><h3><span>attack correlation</span><span>{rows.length}</span></h3>
+    <div className="card"><h3>
+      <span>attack correlation</span>
+      <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <select value={groupBy} onChange={(e) => setGroupBy(e.target.value)}>
+          {ATTACK_GROUPS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+        </select>
+        <select value={window} onChange={(e) => setWindow(e.target.value)}>
+          {WINDOWS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+        </select>
+        {rows.length}
+      </span>
+    </h3>
       <div className="body"><table>
-        <thead><tr><th>time</th><th>ip</th><th>country</th><th>as</th><th>type</th><th>service</th><th>sev</th><th>evidence</th></tr></thead>
-        <tbody>{rows.map((r) => (
-          <tr key={r.id}><td className="muted">{fmt(r.ts)}</td>
-            <td className="ip" onClick={() => onPick(r.src_ip)}>{r.src_ip}</td>
-            <td>{r.country || '—'}</td><td className="muted">{r.org || r.asn || '—'}</td>
-            <td><span className="tag exploiter">{r.attack_type}</span></td>
-            <td>{r.service || '—'}</td><td>{r.severity}</td>
-            <td className="muted">{JSON.stringify(r.evidence).slice(0, 70)}</td></tr>
-        ))}</tbody></table></div></div>
+        {grouped ? (<>
+          <thead><tr><th>{groupBy === 'as' ? 'AS' : 'service'}</th>{groupBy === 'as' && <th>org</th>}<th>count</th><th>avg sev</th></tr></thead>
+          <tbody>{rows.map((r, i) => (
+            <tr key={i}>
+              <td>{groupBy === 'as' ? (r.asn || '—') : (r.label || '—')}</td>
+              {groupBy === 'as' && <td className="muted">{r.org || '—'}</td>}
+              <td>{r.n}</td><td>{r.avg_severity}</td></tr>
+          ))}</tbody>
+        </>) : (<>
+          <thead><tr><th>time</th><th>ip</th><th>country</th><th>as</th><th>type</th><th>service</th><th>sev</th><th>evidence</th></tr></thead>
+          <tbody>{rows.map((r) => (
+            <tr key={r.id}><td className="muted">{fmt(r.ts)}</td>
+              <td className="ip" onClick={() => onPick(r.src_ip)}>{r.src_ip}</td>
+              <td>{r.country || '—'}</td><td className="muted">{r.org || r.asn || '—'}</td>
+              <td><span className="tag exploiter">{r.attack_type}</span></td>
+              <td>{r.service || '—'}</td><td>{r.severity}</td>
+              <td className="muted">{JSON.stringify(r.evidence).slice(0, 70)}</td></tr>
+          ))}</tbody>
+        </>)}
+      </table></div></div>
   )
 }
 
 export function Behavior({ onPick }) {
   const [rows, setRows] = useState([])
-  useEffect(() => { api.behavior().then(setRows).catch(() => {}) }, [])
+  const [window, setWindow] = useState('24h')
+  const [country, setCountry] = useState('')
+  const [asn, setAsn] = useState('')
+  const [tooling, setTooling] = useState('')
+  const [tactic, setTactic] = useState('')
+  const [opts, setOpts] = useState({ countries: [], asns: [], toolings: [], tactics: [] })
+
+  useEffect(() => {
+    let cancelled = false
+    api.behavior('1y').then((all) => {
+      if (cancelled) return
+      const countries = [...new Set(all.map((r) => r.country).filter(Boolean))].sort()
+      const asns = [...new Set(all.map((r) => r.asn).filter(Boolean))].sort()
+      const toolings = [...new Set(all.flatMap((r) => r.tooling_hints || []))].sort()
+      const tactics = [...new Set(all.flatMap((r) => r.tactics || []))].sort()
+      setOpts({ countries, asns, toolings, tactics })
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    api.behavior(window, { country, asn, tooling, tactic })
+      .then((d) => { if (!cancelled) setRows(d) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [window, country, asn, tooling, tactic])
+
   return (
-    <div className="card"><h3><span>behavioral profiles</span><span>{rows.length}</span></h3>
+    <div className="card"><h3>
+      <span>behavioral profiles</span>
+      <span style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+        <select value={country} onChange={(e) => setCountry(e.target.value)}>
+          <option value="">country</option>
+          {opts.countries.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <select value={asn} onChange={(e) => setAsn(e.target.value)}>
+          <option value="">AS</option>
+          {opts.asns.map((a) => <option key={a} value={a}>{a}</option>)}
+        </select>
+        <select value={tooling} onChange={(e) => setTooling(e.target.value)}>
+          <option value="">tooling</option>
+          {opts.toolings.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <select value={tactic} onChange={(e) => setTactic(e.target.value)}>
+          <option value="">tactics</option>
+          {opts.tactics.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <select value={window} onChange={(e) => setWindow(e.target.value)}>
+          {WINDOWS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+        </select>
+        {rows.length}
+      </span>
+    </h3>
       <div className="body"><table>
         <thead><tr><th>ip</th><th>country</th><th>as</th><th>score</th><th>sessions</th><th>tooling</th><th>tactics</th></tr></thead>
         <tbody>{rows.map((r) => (
