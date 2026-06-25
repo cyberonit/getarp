@@ -65,7 +65,7 @@ def norm_cowrie(r: dict):
     e["command"] = r.get("input")
     e["session"] = r.get("session")
     eventid = r.get("eventid", "")
-    e["service"] = "telnet" if "telnet" in str(r.get("protocol", "")).lower() else "ssh"
+    e["service"] = "ssh"
     e["event_type"] = COWRIE_MAP.get(eventid, ("event", None))[0]
     e["raw"] = r
     if not e["ts"] or not e["src_ip"]:
@@ -115,7 +115,7 @@ def norm_extra(r: dict):
 
 
 def _svc_from_port(p):
-    return {22: "ssh", 23: "telnet", 80: "http", 8080: "http", 3306: "mysql",
+    return {22: "ssh", 80: "http", 8080: "http", 3306: "mysql",
             21: "ftp", 6379: "redis"}.get(p, "tcp")
 
 
