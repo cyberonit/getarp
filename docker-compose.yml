@@ -39,7 +39,6 @@ services:
     networks: [honeypot_net]
     ports:
       - "22:2222"           # real sshd MUST be moved to a mgmt port (see setup.sh)
-      - "23:2223"
     volumes:
       - ./honeypot/cowrie/cowrie.cfg:/cowrie/cowrie-git/etc/cowrie.cfg:ro
       - ./honeypot/cowrie/userdb.txt:/cowrie/cowrie-git/etc/userdb.txt:ro
