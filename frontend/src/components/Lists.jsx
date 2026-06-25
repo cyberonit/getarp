@@ -25,7 +25,7 @@ const SCAN_GROUPS = [['', 'None'], ['scan_type', 'Type'], ['as', 'AS']]
 
 export function Scans({ onPick }) {
   const [rows, setRows] = useState([])
-  const [window, setWindow] = useState('24h')
+  const [window, setWindow] = useState('7d')
   const [groupBy, setGroupBy] = useState('')
   const [cf, setCf] = useState({})
   const setF = (k) => (v) => setCf((p) => ({ ...p, [k]: v }))
