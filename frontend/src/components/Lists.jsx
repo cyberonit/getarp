@@ -1,7 +1,25 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api.js'
 
 const fmt = (t) => new Date(t).toLocaleString()
+const WINDOWS = [['1h', '1 h'], ['24h', '24 h'], ['7d', '7 d'], ['30d', '30 d'], ['1y', '1 y']]
+
+function uniqueVals(rows, fn) {
+  return [...new Set(rows.map(fn).filter((v) => v != null && v !== '' && v !== '—'))].sort()
+}
+
+function ColFilter({ rows, accessor, value, onChange, multi }) {
+  const opts = useMemo(() => {
+    if (multi) return [...new Set(rows.flatMap(accessor))].filter(Boolean).sort()
+    return uniqueVals(rows, accessor)
+  }, [rows, accessor, multi])
+  return (
+    <th><select className="col-filter" value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="">all</option>
+      {opts.map((v) => <option key={v} value={v}>{v}</option>)}
+    </select></th>
+  )
+}
 
 const SCAN_GROUPS = [['', 'None'], ['scan_type', 'Type'], ['as', 'AS']]
 
@@ -9,11 +27,22 @@ export function Scans({ onPick }) {
   const [rows, setRows] = useState([])
   const [window, setWindow] = useState('24h')
   const [groupBy, setGroupBy] = useState('')
+  const [cf, setCf] = useState({})
+  const setF = (k) => (v) => setCf((p) => ({ ...p, [k]: v }))
+
   useEffect(() => {
     let cancelled = false
-    api.scans(window, groupBy).then((d) => { if (!cancelled) setRows(d) }).catch(() => {})
+    api.scans(window, groupBy).then((d) => { if (!cancelled) { setRows(d); setCf({}) } }).catch(() => {})
     return () => { cancelled = true }
   }, [window, groupBy])
+
+  const filtered = useMemo(() => {
+    if (groupBy) return rows
+    return rows.filter((r) =>
+      (!cf.country || r.country === cf.country) &&
+      (!cf.org || (r.org || r.asn || '') === cf.org) &&
+      (!cf.scan_type || r.scan_type === cf.scan_type))
+  }, [rows, cf, groupBy])
 
   const grouped = groupBy !== ''
   return (
@@ -26,7 +55,7 @@ export function Scans({ onPick }) {
         <select value={window} onChange={(e) => setWindow(e.target.value)}>
           {WINDOWS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
         </select>
-        {rows.length}
+        {filtered.length}
       </span>
     </h3>
       <div className="body"><table>
@@ -38,8 +67,17 @@ export function Scans({ onPick }) {
               <td>{r.n}</td><td>{r.avg_ports}</td></tr>
           ))}</tbody>
         </>) : (<>
-          <thead><tr><th>time</th><th>ip</th><th>country</th><th>as</th><th>type</th><th>ports</th><th>port list</th></tr></thead>
-          <tbody>{rows.map((r) => (
+          <thead>
+            <tr><th>time</th><th>ip</th><th>country</th><th>as</th><th>type</th><th>ports</th><th>port list</th></tr>
+            <tr className="filter-row">
+              <th></th><th></th>
+              <ColFilter rows={rows} accessor={(r) => r.country} value={cf.country || ''} onChange={setF('country')} />
+              <ColFilter rows={rows} accessor={(r) => r.org || r.asn} value={cf.org || ''} onChange={setF('org')} />
+              <ColFilter rows={rows} accessor={(r) => r.scan_type} value={cf.scan_type || ''} onChange={setF('scan_type')} />
+              <th></th><th></th>
+            </tr>
+          </thead>
+          <tbody>{filtered.map((r) => (
             <tr key={r.id}><td className="muted">{fmt(r.ts)}</td>
               <td className="ip" onClick={() => onPick(r.src_ip)}>{r.src_ip}</td>
               <td>{r.country || '—'}</td><td className="muted">{r.org || r.asn || '—'}</td>
@@ -51,18 +89,29 @@ export function Scans({ onPick }) {
   )
 }
 
-const WINDOWS = [['1h', '1 h'], ['24h', '24 h'], ['7d', '7 d'], ['30d', '30 d'], ['1y', '1 y']]
 const ATTACK_GROUPS = [['', 'None'], ['service', 'Service'], ['as', 'AS']]
 
 export function Attacks({ onPick }) {
   const [rows, setRows] = useState([])
   const [window, setWindow] = useState('24h')
   const [groupBy, setGroupBy] = useState('')
+  const [cf, setCf] = useState({})
+  const setF = (k) => (v) => setCf((p) => ({ ...p, [k]: v }))
+
   useEffect(() => {
     let cancelled = false
-    api.attacks(window, groupBy).then((d) => { if (!cancelled) setRows(d) }).catch(() => {})
+    api.attacks(window, groupBy).then((d) => { if (!cancelled) { setRows(d); setCf({}) } }).catch(() => {})
     return () => { cancelled = true }
   }, [window, groupBy])
+
+  const filtered = useMemo(() => {
+    if (groupBy) return rows
+    return rows.filter((r) =>
+      (!cf.country || r.country === cf.country) &&
+      (!cf.org || (r.org || r.asn || '') === cf.org) &&
+      (!cf.attack_type || r.attack_type === cf.attack_type) &&
+      (!cf.service || r.service === cf.service))
+  }, [rows, cf, groupBy])
 
   const grouped = groupBy !== ''
   return (
@@ -75,7 +124,7 @@ export function Attacks({ onPick }) {
         <select value={window} onChange={(e) => setWindow(e.target.value)}>
           {WINDOWS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
         </select>
-        {rows.length}
+        {filtered.length}
       </span>
     </h3>
       <div className="body"><table>
@@ -87,8 +136,18 @@ export function Attacks({ onPick }) {
               <td>{r.n}</td><td>{r.avg_severity}</td></tr>
           ))}</tbody>
         </>) : (<>
-          <thead><tr><th>time</th><th>ip</th><th>country</th><th>as</th><th>type</th><th>service</th><th>sev</th><th>evidence</th></tr></thead>
-          <tbody>{rows.map((r) => (
+          <thead>
+            <tr><th>time</th><th>ip</th><th>country</th><th>as</th><th>type</th><th>service</th><th>sev</th><th>evidence</th></tr>
+            <tr className="filter-row">
+              <th></th><th></th>
+              <ColFilter rows={rows} accessor={(r) => r.country} value={cf.country || ''} onChange={setF('country')} />
+              <ColFilter rows={rows} accessor={(r) => r.org || r.asn} value={cf.org || ''} onChange={setF('org')} />
+              <ColFilter rows={rows} accessor={(r) => r.attack_type} value={cf.attack_type || ''} onChange={setF('attack_type')} />
+              <ColFilter rows={rows} accessor={(r) => r.service} value={cf.service || ''} onChange={setF('service')} />
+              <th></th><th></th>
+            </tr>
+          </thead>
+          <tbody>{filtered.map((r) => (
             <tr key={r.id}><td className="muted">{fmt(r.ts)}</td>
               <td className="ip" onClick={() => onPick(r.src_ip)}>{r.src_ip}</td>
               <td>{r.country || '—'}</td><td className="muted">{r.org || r.asn || '—'}</td>
@@ -104,61 +163,45 @@ export function Attacks({ onPick }) {
 export function Behavior({ onPick }) {
   const [rows, setRows] = useState([])
   const [window, setWindow] = useState('24h')
-  const [country, setCountry] = useState('')
-  const [asn, setAsn] = useState('')
-  const [tooling, setTooling] = useState('')
-  const [tactic, setTactic] = useState('')
-  const [opts, setOpts] = useState({ countries: [], asns: [], toolings: [], tactics: [] })
+  const [cf, setCf] = useState({})
+  const setF = (k) => (v) => setCf((p) => ({ ...p, [k]: v }))
 
   useEffect(() => {
     let cancelled = false
-    api.behavior('1y').then((all) => {
-      if (cancelled) return
-      const countries = [...new Set(all.map((r) => r.country).filter(Boolean))].sort()
-      const asns = [...new Set(all.map((r) => r.asn).filter(Boolean))].sort()
-      const toolings = [...new Set(all.flatMap((r) => r.tooling_hints || []))].sort()
-      const tactics = [...new Set(all.flatMap((r) => r.tactics || []))].sort()
-      setOpts({ countries, asns, toolings, tactics })
-    }).catch(() => {})
+    api.behavior(window).then((d) => { if (!cancelled) { setRows(d); setCf({}) } }).catch(() => {})
     return () => { cancelled = true }
-  }, [])
+  }, [window])
 
-  useEffect(() => {
-    let cancelled = false
-    api.behavior(window, { country, asn, tooling, tactic })
-      .then((d) => { if (!cancelled) setRows(d) }).catch(() => {})
-    return () => { cancelled = true }
-  }, [window, country, asn, tooling, tactic])
+  const filtered = useMemo(() => rows.filter((r) =>
+    (!cf.country || r.country === cf.country) &&
+    (!cf.org || (r.org || r.asn || '') === cf.org) &&
+    (!cf.tooling || (r.tooling_hints || []).includes(cf.tooling)) &&
+    (!cf.tactic || (r.tactics || []).includes(cf.tactic))
+  ), [rows, cf])
 
   return (
     <div className="card"><h3>
       <span>behavioral profiles</span>
-      <span style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-        <select value={country} onChange={(e) => setCountry(e.target.value)}>
-          <option value="">country</option>
-          {opts.countries.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
-        <select value={asn} onChange={(e) => setAsn(e.target.value)}>
-          <option value="">AS</option>
-          {opts.asns.map((a) => <option key={a} value={a}>{a}</option>)}
-        </select>
-        <select value={tooling} onChange={(e) => setTooling(e.target.value)}>
-          <option value="">tooling</option>
-          {opts.toolings.map((t) => <option key={t} value={t}>{t}</option>)}
-        </select>
-        <select value={tactic} onChange={(e) => setTactic(e.target.value)}>
-          <option value="">tactics</option>
-          {opts.tactics.map((t) => <option key={t} value={t}>{t}</option>)}
-        </select>
+      <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
         <select value={window} onChange={(e) => setWindow(e.target.value)}>
           {WINDOWS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
         </select>
-        {rows.length}
+        {filtered.length}
       </span>
     </h3>
       <div className="body"><table>
-        <thead><tr><th>ip</th><th>country</th><th>as</th><th>score</th><th>sessions</th><th>tooling</th><th>tactics</th></tr></thead>
-        <tbody>{rows.map((r) => (
+        <thead>
+          <tr><th>ip</th><th>country</th><th>as</th><th>score</th><th>sessions</th><th>tooling</th><th>tactics</th></tr>
+          <tr className="filter-row">
+            <th></th>
+            <ColFilter rows={rows} accessor={(r) => r.country} value={cf.country || ''} onChange={setF('country')} />
+            <ColFilter rows={rows} accessor={(r) => r.org || r.asn} value={cf.org || ''} onChange={setF('org')} />
+            <th></th><th></th>
+            <ColFilter rows={rows} accessor={(r) => r.tooling_hints || []} value={cf.tooling || ''} onChange={setF('tooling')} multi />
+            <ColFilter rows={rows} accessor={(r) => r.tactics || []} value={cf.tactic || ''} onChange={setF('tactic')} multi />
+          </tr>
+        </thead>
+        <tbody>{filtered.map((r) => (
           <tr key={r.src_ip}>
             <td className="ip" onClick={() => onPick(r.src_ip)}>{r.src_ip}</td>
             <td>{r.country || '—'}</td><td className="muted">{r.org || r.asn || '—'}</td>

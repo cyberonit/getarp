@@ -165,6 +165,12 @@ select {
   background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
   font-family: var(--mono); font-size: 11px; padding: 5px 8px; border-radius: 6px;
 }
+.filter-row th { padding: 2px 4px; }
+.col-filter {
+  width: 100%; box-sizing: border-box;
+  font-size: 10px; padding: 3px 4px; border-radius: 4px;
+  background: var(--ink); border: 1px solid var(--line); color: var(--text-dim);
+}
 
 /* ── update actions ── */
 .update-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

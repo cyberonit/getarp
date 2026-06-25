@@ -206,43 +206,18 @@ async def attacks(request: Request, limit: int = Query(100, ge=1, le=500),
 @router.get("/behavior")
 @limiter.limit("60/minute")
 async def behavior(request: Request, limit: int = Query(100, ge=1, le=500),
-                   window: str = Query("24h"), country: str = Query(""),
-                   asn: str = Query(""), tooling: str = Query(""),
-                   tactic: str = Query("")):
+                   window: str = Query("24h")):
     intervals = {"1h": "1 hour", "24h": "24 hours", "7d": "7 days", "30d": "30 days", "1y": "1 year"}
     iv = intervals.get(window)
     if not iv:
         raise HTTPException(400, "invalid window")
-    conditions = [f"b.updated_at > now() - interval '{iv}'"]
-    params: list = []
-    idx = 1
-
-    if country:
-        params.append(country)
-        conditions.append(f"e.country = ${idx}")
-        idx += 1
-    if asn:
-        params.append(asn)
-        conditions.append(f"e.asn::text = ${idx}")
-        idx += 1
-    if tooling:
-        params.append(tooling)
-        conditions.append(f"${idx} = ANY(b.tooling_hints)")
-        idx += 1
-    if tactic:
-        params.append(tactic)
-        conditions.append(f"${idx} = ANY(b.tactics)")
-        idx += 1
-
-    params.append(limit)
-    where = "WHERE " + " AND ".join(conditions)
-
     async with db.pool().acquire() as con:
         rows = await con.fetch(
             f"SELECT host(b.src_ip) AS src_ip, b.sessions, b.threat_score, b.tooling_hints, b.tactics, "
             f"b.commands_seen, b.updated_at, e.country, e.asn, e.org "
             f"FROM behavior_profiles b LEFT JOIN ip_enrichment e ON e.src_ip=b.src_ip "
-            f"{where} ORDER BY b.threat_score DESC LIMIT ${idx}", *params)
+            f"WHERE b.updated_at > now() - interval '{iv}' "
+            f"ORDER BY b.threat_score DESC LIMIT $1", limit)
     return [dict(r) for r in rows]
 
 
