@@ -133,13 +133,37 @@ async def latest_events(request: Request, limit: int = Query(50, ge=1, le=200),
 
 @router.get("/scans")
 @limiter.limit("60/minute")
-async def scans(request: Request, limit: int = Query(100, ge=1, le=500)):
+async def scans(request: Request, limit: int = Query(100, ge=1, le=500),
+                window: str = Query("24h"), group_by: str = Query("")):
+    intervals = {"1h": "1 hour", "24h": "24 hours", "7d": "7 days", "30d": "30 days", "1y": "1 year"}
+    iv = intervals.get(window)
+    if not iv:
+        raise HTTPException(400, "invalid window")
+    time_filter = f"WHERE s.ts > now() - interval '{iv}'"
+
+    if group_by == "scan_type":
+        async with db.pool().acquire() as con:
+            rows = await con.fetch(
+                f"SELECT s.scan_type AS label, count(*) AS n, avg(s.port_count)::int AS avg_ports "
+                f"FROM scan_events s {time_filter} AND s.scan_type IS NOT NULL "
+                f"GROUP BY s.scan_type ORDER BY n DESC LIMIT $1", limit)
+        return [dict(r) for r in rows]
+
+    if group_by == "as":
+        async with db.pool().acquire() as con:
+            rows = await con.fetch(
+                f"SELECT e.asn, e.org, count(*) AS n, avg(s.port_count)::int AS avg_ports "
+                f"FROM scan_events s LEFT JOIN ip_enrichment e ON e.src_ip=s.src_ip "
+                f"{time_filter} AND e.asn IS NOT NULL "
+                f"GROUP BY e.asn, e.org ORDER BY n DESC LIMIT $1", limit)
+        return [dict(r) for r in rows]
+
     async with db.pool().acquire() as con:
         rows = await con.fetch(
-            "SELECT s.id, s.ts, host(s.src_ip) AS src_ip, s.scan_type, s.port_count, s.ports, s.detail, "
-            "e.country, e.asn, e.org "
-            "FROM scan_events s LEFT JOIN ip_enrichment e ON e.src_ip=s.src_ip "
-            "ORDER BY s.ts DESC LIMIT $1", limit)
+            f"SELECT s.id, s.ts, host(s.src_ip) AS src_ip, s.scan_type, s.port_count, s.ports, s.detail, "
+            f"e.country, e.asn, e.org "
+            f"FROM scan_events s LEFT JOIN ip_enrichment e ON e.src_ip=s.src_ip "
+            f"{time_filter} ORDER BY s.ts DESC LIMIT $1", limit)
     return [dict(r) for r in rows]
 
 
