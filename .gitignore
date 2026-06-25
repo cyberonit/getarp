@@ -5,3 +5,4 @@
 *.pyc
 .claude/
 crowdsec/whitelists.yaml
+maintenance/logs/
