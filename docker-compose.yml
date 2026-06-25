@@ -32,6 +32,24 @@ volumes:
   caddy_data:
 
 services:
+  # Restricted Docker socket proxy — only exposes container list/inspect/logs/restart.
+  # The API container talks to this instead of the raw Docker socket.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:0.3
+    restart: unless-stopped
+    networks: [data_net]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      CONTAINERS: 1
+      POST: 1
+      IMAGES: 1
+      LOG_LEVEL: warning
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 128M }
+    logging: *default-logging
+
   # ───────────────────────── DECEPTION (isolated) ─────────────────────────
   cowrie:
     image: cowrie/cowrie:latest      # no versioned tags available upstream
@@ -279,12 +297,10 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       CROWDSEC_LAPI_URL: http://crowdsec:8080
       CROWDSEC_BOUNCER_KEY: ${CROWDSEC_BOUNCER_KEY}
+      DOCKER_HOST: tcp://docker-proxy:2375
     volumes:
       - ./docs:/app/docs:ro
       - honeypot_logs:/data/logs:ro
-      - /var/run/docker.sock:/var/run/docker.sock
-    group_add:
-      - "${DOCKER_GID:-0}"        # host docker-socket GID; run: stat -c '%g' /var/run/docker.sock
     depends_on:
       postgres:
         condition: service_healthy

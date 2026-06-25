@@ -1,14 +1,13 @@
 const BASE = import.meta.env.VITE_API_BASE || '/api'
 
-function token() { return localStorage.getItem('getarp_token') }
+let csrfToken = sessionStorage.getItem('csrf') || ''
 
-function authHeaders() {
-  const t = token()
-  return t ? { Authorization: `Bearer ${t}` } : {}
+function mutHeaders() {
+  return { 'Content-Type': 'application/json', 'x-csrf-token': csrfToken }
 }
 
 async function get(path) {
-  const r = await fetch(BASE + path, { headers: authHeaders() })
+  const r = await fetch(BASE + path, { credentials: 'same-origin' })
   if (!r.ok) throw new Error(`${r.status}`)
   return r.json()
 }
@@ -40,20 +39,25 @@ export const api = {
     const r = await fetch(BASE + '/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
       body: JSON.stringify({ username, password }),
     })
     if (!r.ok) throw new Error('bad credentials')
     const d = await r.json()
-    localStorage.setItem('getarp_token', d.access_token)
+    csrfToken = d.csrf_token || ''
+    sessionStorage.setItem('csrf', csrfToken)
     return d
   },
   async logout() {
     try {
-      await fetch(BASE + '/auth/logout', { method: 'POST', headers: authHeaders() })
+      await fetch(BASE + '/auth/logout', {
+        method: 'POST', headers: mutHeaders(), credentials: 'same-origin',
+      })
     } catch {}
-    localStorage.removeItem('getarp_token')
+    csrfToken = ''
+    sessionStorage.removeItem('csrf')
   },
-  isAuthed: () => !!token(),
+  isAuthed: () => !!csrfToken,
 
   docs: () => get('/docs'),
   docUrl: (name) => `${BASE}/docs/${name}`,
@@ -67,21 +71,21 @@ export const api = {
   dockerVersions: () => get('/admin/docker/versions'),
   async dockerPull(service) {
     const r = await fetch(BASE + `/admin/docker/pull/${service}`, {
-      method: 'POST', headers: authHeaders(),
+      method: 'POST', headers: mutHeaders(), credentials: 'same-origin',
     })
     if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || 'pull failed') }
     return r.json()
   },
   async dockerRollback(service) {
     const r = await fetch(BASE + `/admin/docker/rollback/${service}`, {
-      method: 'POST', headers: authHeaders(),
+      method: 'POST', headers: mutHeaders(), credentials: 'same-origin',
     })
     if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || 'rollback failed') }
     return r.json()
   },
   async dockerRestart(service) {
     const r = await fetch(BASE + `/admin/docker/restart/${service}`, {
-      method: 'POST', headers: authHeaders(),
+      method: 'POST', headers: mutHeaders(), credentials: 'same-origin',
     })
     if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || 'restart failed') }
     return r.json()
@@ -91,16 +95,23 @@ export const api = {
   async saveSetting(key, value) {
     const r = await fetch(BASE + '/admin/settings', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      headers: mutHeaders(),
+      credentials: 'same-origin',
       body: JSON.stringify({ key, value }),
     })
     if (!r.ok) throw new Error('save failed')
     return r.json()
   },
 
-  liveSocket(onMsg) {
+  async liveSocket(onMsg) {
+    if (!csrfToken) return null
+    const t = await fetch(BASE + '/auth/ws-ticket', {
+      method: 'POST', headers: mutHeaders(), credentials: 'same-origin',
+    })
+    if (!t.ok) return null
+    const { ticket } = await t.json()
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const url = `${proto}://${location.host}${BASE}/ws/status`
+    const url = `${proto}://${location.host}${BASE}/ws/status?ticket=${ticket}`
     const ws = new WebSocket(url)
     ws.onmessage = (e) => { try { onMsg(JSON.parse(e.data)) } catch {} }
     ws.onerror = () => {}

@@ -157,6 +157,16 @@ CREATE TABLE revoked_tokens (
 );
 CREATE INDEX idx_revoked_expires ON revoked_tokens (expires_at);
 
+-- admin audit trail — immutable log of all privileged operations
+CREATE TABLE audit_log (
+    id         BIGSERIAL PRIMARY KEY,
+    ts         TIMESTAMPTZ DEFAULT now(),
+    username   TEXT NOT NULL,
+    action     TEXT NOT NULL,
+    detail     JSONB
+);
+CREATE INDEX idx_audit_ts ON audit_log (ts DESC);
+
 -- ─────────────── retention (tune for your legal/PII requirements) ───────────────
 SELECT add_retention_policy('events', INTERVAL '90 days');
 SELECT add_retention_policy('status_snapshots', INTERVAL '180 days');
@@ -258,6 +268,7 @@ BEGIN
                         behavior_profiles, status_snapshots TO svc_api;
         GRANT SELECT, INSERT, UPDATE ON users, settings, reports, revoked_tokens TO svc_api;
         GRANT DELETE ON revoked_tokens TO svc_api;
+        GRANT INSERT, SELECT ON audit_log TO svc_api;
         GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO svc_api;
     END IF;
 END $$;

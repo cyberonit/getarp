@@ -6,11 +6,21 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+import audit
 from auth import require_admin
 
 router = APIRouter(prefix="/api/admin/docker", tags=["docker"])
 
-SOCKET = "/var/run/docker.sock"
+ALLOWED_SERVICES = {
+    "api", "frontend", "caddy", "pipeline", "enrichment", "analytics",
+    "postgres", "redis", "cowrie", "extra-services", "suricata",
+    "crowdsec", "docker-proxy",
+}
+
+
+def _validate_service(service: str):
+    if service not in ALLOWED_SERVICES:
+        raise HTTPException(400, f"unknown service: {service!r}")
 
 
 def _client():
@@ -76,6 +86,7 @@ async def service_logs(
     lines: int = Query(150, ge=10, le=2000),
     user=Depends(require_admin),
 ):
+    _validate_service(service)
     def _logs():
         client = _client()
         project = _compose_project()
@@ -135,6 +146,7 @@ async def service_versions(user=Depends(require_admin)):
 @router.post("/pull/{service}")
 async def pull_update(service: str, user=Depends(require_admin)):
     """Pull the latest image for a service and recreate its container."""
+    _validate_service(service)
     def _pull():
         client = _client()
         project = _compose_project()
@@ -174,6 +186,7 @@ async def pull_update(service: str, user=Depends(require_admin)):
     result, err = await asyncio.to_thread(_pull)
     if err:
         raise HTTPException(400, err)
+    await audit.log(user["username"], "docker_pull", result)
     return result
 
 
@@ -194,6 +207,7 @@ def _save_rollback(client, service, image_id, image_ref):
 @router.post("/rollback/{service}")
 async def rollback_service(service: str, user=Depends(require_admin)):
     """Restore the previous image for a service."""
+    _validate_service(service)
     def _rollback():
         client = _client()
         rollback_tag = f"getarp-rollback/{service}:previous"
@@ -230,6 +244,7 @@ async def rollback_service(service: str, user=Depends(require_admin)):
     result, err = await asyncio.to_thread(_rollback)
     if err:
         raise HTTPException(400, err)
+    await audit.log(user["username"], "docker_rollback", result)
     return result
 
 
@@ -237,6 +252,7 @@ async def rollback_service(service: str, user=Depends(require_admin)):
 
 @router.post("/restart/{service}")
 async def restart_service(service: str, user=Depends(require_admin)):
+    _validate_service(service)
     def _restart():
         client = _client()
         project = _compose_project()
@@ -254,4 +270,5 @@ async def restart_service(service: str, user=Depends(require_admin)):
     result = await asyncio.to_thread(_restart)
     if result is None:
         raise HTTPException(404, f"service {service!r} not found")
+    await audit.log(user["username"], "docker_restart", result)
     return result
