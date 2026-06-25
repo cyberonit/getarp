@@ -19,8 +19,19 @@ export const api = {
   ips: (order = 'threat_score') => get(`/ips?order=${order}&limit=200`),
   ipDetail: (ip) => get(`/ips/${ip}`),
   scans: () => get('/scans'),
-  attacks: () => get('/attacks'),
-  behavior: () => get('/behavior'),
+  attacks: (window = '24h', groupBy = '') => {
+    const p = new URLSearchParams({ window })
+    if (groupBy) p.set('group_by', groupBy)
+    return get(`/attacks?${p}`)
+  },
+  behavior: (window = '24h', filters = {}) => {
+    const p = new URLSearchParams({ window })
+    if (filters.country) p.set('country', filters.country)
+    if (filters.asn) p.set('asn', filters.asn)
+    if (filters.tooling) p.set('tooling', filters.tooling)
+    if (filters.tactic) p.set('tactic', filters.tactic)
+    return get(`/behavior?${p}`)
+  },
   map: () => get('/map'),
   topCountries: (window = '1h') => get(`/top-countries?window=${window}`),
   topAS: (window = '1h') => get(`/top-as?window=${window}`),

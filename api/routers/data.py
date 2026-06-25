@@ -145,25 +145,80 @@ async def scans(request: Request, limit: int = Query(100, ge=1, le=500)):
 
 @router.get("/attacks")
 @limiter.limit("60/minute")
-async def attacks(request: Request, limit: int = Query(100, ge=1, le=500)):
+async def attacks(request: Request, limit: int = Query(100, ge=1, le=500),
+                  window: str = Query("24h"), group_by: str = Query("")):
+    intervals = {"1h": "1 hour", "24h": "24 hours", "7d": "7 days", "30d": "30 days", "1y": "1 year"}
+    iv = intervals.get(window)
+    if not iv:
+        raise HTTPException(400, "invalid window")
+    time_filter = f"WHERE a.ts > now() - interval '{iv}'"
+
+    if group_by == "service":
+        async with db.pool().acquire() as con:
+            rows = await con.fetch(
+                f"SELECT a.service AS label, count(*) AS n, avg(a.severity)::int AS avg_severity "
+                f"FROM attack_events a {time_filter} AND a.service IS NOT NULL "
+                f"GROUP BY a.service ORDER BY n DESC LIMIT $1", limit)
+        return [dict(r) for r in rows]
+
+    if group_by == "as":
+        async with db.pool().acquire() as con:
+            rows = await con.fetch(
+                f"SELECT e.asn, e.org, count(*) AS n, avg(a.severity)::int AS avg_severity "
+                f"FROM attack_events a LEFT JOIN ip_enrichment e ON e.src_ip=a.src_ip "
+                f"{time_filter} AND e.asn IS NOT NULL "
+                f"GROUP BY e.asn, e.org ORDER BY n DESC LIMIT $1", limit)
+        return [dict(r) for r in rows]
+
     async with db.pool().acquire() as con:
         rows = await con.fetch(
-            "SELECT a.id, a.ts, host(a.src_ip) AS src_ip, a.attack_type, a.service, a.severity, a.evidence, "
-            "e.country, e.asn, e.org "
-            "FROM attack_events a LEFT JOIN ip_enrichment e ON e.src_ip=a.src_ip "
-            "ORDER BY a.ts DESC LIMIT $1", limit)
+            f"SELECT a.id, a.ts, host(a.src_ip) AS src_ip, a.attack_type, a.service, a.severity, a.evidence, "
+            f"e.country, e.asn, e.org "
+            f"FROM attack_events a LEFT JOIN ip_enrichment e ON e.src_ip=a.src_ip "
+            f"{time_filter} ORDER BY a.ts DESC LIMIT $1", limit)
     return [dict(r) for r in rows]
 
 
 @router.get("/behavior")
 @limiter.limit("60/minute")
-async def behavior(request: Request, limit: int = Query(100, ge=1, le=500)):
+async def behavior(request: Request, limit: int = Query(100, ge=1, le=500),
+                   window: str = Query("24h"), country: str = Query(""),
+                   asn: str = Query(""), tooling: str = Query(""),
+                   tactic: str = Query("")):
+    intervals = {"1h": "1 hour", "24h": "24 hours", "7d": "7 days", "30d": "30 days", "1y": "1 year"}
+    iv = intervals.get(window)
+    if not iv:
+        raise HTTPException(400, "invalid window")
+    conditions = [f"b.updated_at > now() - interval '{iv}'"]
+    params: list = []
+    idx = 1
+
+    if country:
+        params.append(country)
+        conditions.append(f"e.country = ${idx}")
+        idx += 1
+    if asn:
+        params.append(asn)
+        conditions.append(f"e.asn::text = ${idx}")
+        idx += 1
+    if tooling:
+        params.append(tooling)
+        conditions.append(f"${idx} = ANY(b.tooling_hints)")
+        idx += 1
+    if tactic:
+        params.append(tactic)
+        conditions.append(f"${idx} = ANY(b.tactics)")
+        idx += 1
+
+    params.append(limit)
+    where = "WHERE " + " AND ".join(conditions)
+
     async with db.pool().acquire() as con:
         rows = await con.fetch(
-            "SELECT host(b.src_ip) AS src_ip, b.sessions, b.threat_score, b.tooling_hints, b.tactics, "
-            "b.commands_seen, b.updated_at, e.country, e.asn, e.org "
-            "FROM behavior_profiles b LEFT JOIN ip_enrichment e ON e.src_ip=b.src_ip "
-            "ORDER BY b.threat_score DESC LIMIT $1", limit)
+            f"SELECT host(b.src_ip) AS src_ip, b.sessions, b.threat_score, b.tooling_hints, b.tactics, "
+            f"b.commands_seen, b.updated_at, e.country, e.asn, e.org "
+            f"FROM behavior_profiles b LEFT JOIN ip_enrichment e ON e.src_ip=b.src_ip "
+            f"{where} ORDER BY b.threat_score DESC LIMIT ${idx}", *params)
     return [dict(r) for r in rows]
 
 
