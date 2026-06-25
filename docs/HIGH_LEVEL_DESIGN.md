@@ -40,7 +40,7 @@ network path from a popped honeypot into your intelligence database.
    │  VM (8 vCPU / 64 GB)         │                                       │
    │                             │                                       │
    │  ┌─────────── honeypot_net (ISOLATED, no egress to data) ────────┐  │
-   │  │  Cowrie (SSH 22 / Telnet 23)   Extra-Services emulator        │  │
+   │  │  Cowrie (SSH 22)               Extra-Services emulator        │  │
    │  │  • fake creds / fake FS        (HTTP, MySQL "DB", FTP, Redis) │  │
    │  │            │   writes JSON              │  writes JSON         │  │
    │  └────────────┼───────────────────────────┼─────────────────────┘  │
@@ -81,7 +81,7 @@ shared log volume.
 
 | Layer | Component | Tech | Role |
 |---|---|---|---|
-| Deception | Cowrie | `cowrie/cowrie` | Medium-interaction SSH/Telnet, fake FS, fake creds |
+| Deception | Cowrie | `cowrie/cowrie` | Medium-interaction SSH, fake FS, fake creds |
 | Deception | Extra-Services | custom asyncio | HTTP/MySQL("DB")/FTP/Redis banners, logs auth attempts |
 | Detection | Suricata | `jasonish/suricata` | IDS on the public NIC, ET Open + custom rules → `eve.json` |
 | Intel/Enforcement | CrowdSec | `crowdsecurity/crowdsec` | Parses sensor logs, makes decisions, CTI enrichment, community blocklist |
@@ -105,7 +105,7 @@ sensor or a provider, and nothing else changes as long as it emits/consumes this
   "event_id": "uuid",
   "ts": "RFC3339",
   "sensor": "cowrie|suricata|extra",
-  "service": "ssh|telnet|http|mysql|ftp|redis|...",
+  "service": "ssh|http|mysql|ftp|redis|...",
   "event_type": "connect|login_attempt|login_success|command|alert|scan|file",
   "src_ip": "x.x.x.x",
   "src_port": 0,
