@@ -4,7 +4,7 @@ import os
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 import jwt
 from jwt.exceptions import InvalidTokenError
@@ -104,11 +104,30 @@ async def _validate_token(raw_token: str) -> dict:
             "jti": jti, "exp": payload.get("exp", 0)}
 
 
-async def current_user(token: str = Depends(oauth2)) -> dict:
-    return await _validate_token(token)
+COOKIE_NAME = "getarp_session"
+CSRF_HEADER = "x-csrf-token"
 
 
-async def require_admin(user: dict = Depends(current_user)) -> dict:
+def _extract_token(request) -> str:
+    cookie = request.cookies.get(COOKIE_NAME)
+    if cookie:
+        return cookie
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        return auth_header[7:]
+    raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authenticated",
+                        headers={"WWW-Authenticate": "Bearer"})
+
+
+async def current_user(request: Request) -> dict:
+    return await _validate_token(_extract_token(request))
+
+
+async def require_admin(request: Request) -> dict:
+    user = await current_user(request)
     if user.get("role") != "admin":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "admin role required")
+    if request.method in ("POST", "PUT", "DELETE"):
+        if not request.headers.get(CSRF_HEADER):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "missing CSRF token")
     return user

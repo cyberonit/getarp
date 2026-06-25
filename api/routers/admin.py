@@ -5,6 +5,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+import audit
 import db
 from auth import require_admin
 
@@ -57,11 +58,13 @@ async def put_setting(s: Setting, user=Depends(require_admin)):
         raise HTTPException(400, f"unknown setting key: {s.key!r}")
     _validate_value(s.key, s.value)
     async with db.pool().acquire() as con:
+        old = await con.fetchval("SELECT value FROM settings WHERE key=$1", s.key)
         await con.execute(
             """INSERT INTO settings (key, value, updated_at) VALUES ($1,$2, now())
                ON CONFLICT (key) DO UPDATE SET value=$2, updated_at=now()""",
-            s.key, s.value)  # pool codec handles JSONB encoding
-    # NOTE: services read settings at startup; some changes need a service restart.
+            s.key, s.value)
+    await audit.log(user["username"], "setting_change",
+                    {"key": s.key, "old": old, "new": s.value})
     return {"ok": True, "note": "some settings apply on next service restart"}
 
 
@@ -95,6 +98,7 @@ async def regenerate_report_html(user=Depends(require_admin)):
             new_html = _render_report_html(row["kind"], s)
             await con.execute("UPDATE reports SET html=$1 WHERE id=$2", new_html, row["id"])
             updated += 1
+    await audit.log(user["username"], "regenerate_report_html", {"updated": updated})
     return {"updated": updated}
 
 

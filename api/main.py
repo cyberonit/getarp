@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import redis.asyncio as redis
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import jwt
 from jwt.exceptions import InvalidTokenError
 from pydantic import BaseModel
@@ -18,9 +19,14 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
+import audit
 import db
 import auth
 from routers import data, admin, crowdsec, honeypot, docker_ops
+
+COOKIE_NAME = "getarp_session"
+CSRF_HEADER = "x-csrf-token"
+SECURE_COOKIE = os.environ.get("SECURE_COOKIE", "1") == "1"
 
 limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
 
@@ -85,8 +91,15 @@ async def login(request: Request, body: LoginRequest):
             await p.execute()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "bad credentials")
     await R.delete(key)
-    return {"access_token": auth.make_token(user["username"], user["role"]),
-            "token_type": "bearer", "role": user["role"]}
+    await audit.log(user["username"], "login", {"ip": ip})
+    token = auth.make_token(user["username"], user["role"])
+    csrf = secrets.token_urlsafe(32)
+    resp = JSONResponse({"token_type": "bearer", "role": user["role"], "csrf_token": csrf})
+    resp.set_cookie(
+        COOKIE_NAME, token,
+        httponly=True, secure=SECURE_COOKIE, samesite="strict",
+        max_age=auth.EXPIRE * 60, path="/api")
+    return resp
 
 
 @app.post("/api/auth/logout")
@@ -97,7 +110,9 @@ async def logout(user=Depends(auth.current_user)):
     if jti:
         expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
         await auth.revoke_token(jti, expires_at)
-    return {"ok": True}
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(COOKIE_NAME, path="/api")
+    return resp
 
 
 @app.get("/api/me")
@@ -165,7 +180,17 @@ async def attack_map(request: Request):
 
 # ───────────────────────── WebSocket: push live events ─────────────────────────
 @app.websocket("/api/ws/status")
-async def ws_status(ws: WebSocket):
+async def ws_status(ws: WebSocket, ticket: str = Query("")):
+    if not ticket:
+        await ws.close(code=4401, reason="missing ticket")
+        return
+    key = f"ws:ticket:{ticket}"
+    payload = await R.get(key)
+    if not payload:
+        await ws.close(code=4401, reason="invalid or expired ticket")
+        return
+    await R.delete(key)
+
     await ws.accept()
     pubsub = R.pubsub()
     await pubsub.subscribe(STATUS_CHANNEL)
