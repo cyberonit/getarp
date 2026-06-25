@@ -3,20 +3,51 @@ import { api } from '../lib/api.js'
 
 const fmt = (t) => new Date(t).toLocaleString()
 
+const SCAN_GROUPS = [['', 'None'], ['scan_type', 'Type'], ['as', 'AS']]
+
 export function Scans({ onPick }) {
   const [rows, setRows] = useState([])
-  useEffect(() => { api.scans().then(setRows).catch(() => {}) }, [])
+  const [window, setWindow] = useState('24h')
+  const [groupBy, setGroupBy] = useState('')
+  useEffect(() => {
+    let cancelled = false
+    api.scans(window, groupBy).then((d) => { if (!cancelled) setRows(d) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [window, groupBy])
+
+  const grouped = groupBy !== ''
   return (
-    <div className="card"><h3><span>scan correlation</span><span>{rows.length}</span></h3>
+    <div className="card"><h3>
+      <span>scan correlation</span>
+      <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <select value={groupBy} onChange={(e) => setGroupBy(e.target.value)}>
+          {SCAN_GROUPS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+        </select>
+        <select value={window} onChange={(e) => setWindow(e.target.value)}>
+          {WINDOWS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+        </select>
+        {rows.length}
+      </span>
+    </h3>
       <div className="body"><table>
-        <thead><tr><th>time</th><th>ip</th><th>country</th><th>as</th><th>type</th><th>ports</th><th>port list</th></tr></thead>
-        <tbody>{rows.map((r) => (
-          <tr key={r.id}><td className="muted">{fmt(r.ts)}</td>
-            <td className="ip" onClick={() => onPick(r.src_ip)}>{r.src_ip}</td>
-            <td>{r.country || '—'}</td><td className="muted">{r.org || r.asn || '—'}</td>
-            <td><span className="tag scanner">{r.scan_type}</span></td>
-            <td>{r.port_count}</td><td className="muted">{(r.ports || []).join(' ')}</td></tr>
-        ))}</tbody></table></div></div>
+        {grouped ? (<>
+          <thead><tr><th>{groupBy === 'as' ? 'AS' : 'type'}</th><th>count</th><th>avg ports</th></tr></thead>
+          <tbody>{rows.map((r, i) => (
+            <tr key={i}>
+              <td>{groupBy === 'as' ? (r.org || r.asn || '—') : (r.label || '—')}</td>
+              <td>{r.n}</td><td>{r.avg_ports}</td></tr>
+          ))}</tbody>
+        </>) : (<>
+          <thead><tr><th>time</th><th>ip</th><th>country</th><th>as</th><th>type</th><th>ports</th><th>port list</th></tr></thead>
+          <tbody>{rows.map((r) => (
+            <tr key={r.id}><td className="muted">{fmt(r.ts)}</td>
+              <td className="ip" onClick={() => onPick(r.src_ip)}>{r.src_ip}</td>
+              <td>{r.country || '—'}</td><td className="muted">{r.org || r.asn || '—'}</td>
+              <td><span className="tag scanner">{r.scan_type}</span></td>
+              <td>{r.port_count}</td><td className="muted">{(r.ports || []).join(' ')}</td></tr>
+          ))}</tbody>
+        </>)}
+      </table></div></div>
   )
 }
 
@@ -49,11 +80,10 @@ export function Attacks({ onPick }) {
     </h3>
       <div className="body"><table>
         {grouped ? (<>
-          <thead><tr><th>{groupBy === 'as' ? 'AS' : 'service'}</th>{groupBy === 'as' && <th>org</th>}<th>count</th><th>avg sev</th></tr></thead>
+          <thead><tr><th>{groupBy === 'as' ? 'AS' : 'service'}</th><th>count</th><th>avg sev</th></tr></thead>
           <tbody>{rows.map((r, i) => (
             <tr key={i}>
-              <td>{groupBy === 'as' ? (r.asn || '—') : (r.label || '—')}</td>
-              {groupBy === 'as' && <td className="muted">{r.org || '—'}</td>}
+              <td>{groupBy === 'as' ? (r.org || r.asn || '—') : (r.label || '—')}</td>
               <td>{r.n}</td><td>{r.avg_severity}</td></tr>
           ))}</tbody>
         </>) : (<>

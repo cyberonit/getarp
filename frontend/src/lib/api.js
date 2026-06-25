@@ -18,7 +18,11 @@ export const api = {
   statusHistory: (h = 24) => get(`/status/history?hours=${h}`),
   ips: (order = 'threat_score') => get(`/ips?order=${order}&limit=200`),
   ipDetail: (ip) => get(`/ips/${ip}`),
-  scans: () => get('/scans'),
+  scans: (window = '24h', groupBy = '') => {
+    const p = new URLSearchParams({ window })
+    if (groupBy) p.set('group_by', groupBy)
+    return get(`/scans?${p}`)
+  },
   attacks: (window = '24h', groupBy = '') => {
     const p = new URLSearchParams({ window })
     if (groupBy) p.set('group_by', groupBy)
