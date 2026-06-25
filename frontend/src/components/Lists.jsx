@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api.js'
 
 const fmt = (t) => new Date(t).toLocaleString()
+const fmtDate = (t) => t ? new Date(t).toISOString().slice(0, 10) : ''
 const WINDOWS = [['1h', '1 h'], ['24h', '24 h'], ['7d', '7 d'], ['30d', '30 d'], ['1y', '1 y']]
 
 function uniqueVals(rows, fn) {
@@ -19,6 +20,11 @@ function ColFilter({ rows, accessor, value, onChange, multi }) {
       {opts.map((v) => <option key={v} value={v}>{v}</option>)}
     </select></th>
   )
+}
+
+function matchFilter(cf, key, val) {
+  if (!cf[key]) return true
+  return String(val) === cf[key]
 }
 
 const SCAN_GROUPS = [['', 'None'], ['scan_type', 'Type'], ['as', 'AS']]
@@ -39,9 +45,12 @@ export function Scans({ onPick }) {
   const filtered = useMemo(() => {
     if (groupBy) return rows
     return rows.filter((r) =>
-      (!cf.country || r.country === cf.country) &&
-      (!cf.org || (r.org || r.asn || '') === cf.org) &&
-      (!cf.scan_type || r.scan_type === cf.scan_type))
+      matchFilter(cf, 'date', fmtDate(r.ts)) &&
+      matchFilter(cf, 'ip', r.src_ip) &&
+      matchFilter(cf, 'country', r.country) &&
+      matchFilter(cf, 'org', r.org || r.asn) &&
+      matchFilter(cf, 'scan_type', r.scan_type) &&
+      matchFilter(cf, 'ports', r.port_count))
   }, [rows, cf, groupBy])
 
   const grouped = groupBy !== ''
@@ -70,11 +79,13 @@ export function Scans({ onPick }) {
           <thead>
             <tr><th>time</th><th>ip</th><th>country</th><th>as</th><th>type</th><th>ports</th><th>port list</th></tr>
             <tr className="filter-row">
-              <th></th><th></th>
+              <ColFilter rows={rows} accessor={(r) => fmtDate(r.ts)} value={cf.date || ''} onChange={setF('date')} />
+              <ColFilter rows={rows} accessor={(r) => r.src_ip} value={cf.ip || ''} onChange={setF('ip')} />
               <ColFilter rows={rows} accessor={(r) => r.country} value={cf.country || ''} onChange={setF('country')} />
               <ColFilter rows={rows} accessor={(r) => r.org || r.asn} value={cf.org || ''} onChange={setF('org')} />
               <ColFilter rows={rows} accessor={(r) => r.scan_type} value={cf.scan_type || ''} onChange={setF('scan_type')} />
-              <th></th><th></th>
+              <ColFilter rows={rows} accessor={(r) => r.port_count} value={cf.ports || ''} onChange={setF('ports')} />
+              <th></th>
             </tr>
           </thead>
           <tbody>{filtered.map((r) => (
@@ -107,10 +118,13 @@ export function Attacks({ onPick }) {
   const filtered = useMemo(() => {
     if (groupBy) return rows
     return rows.filter((r) =>
-      (!cf.country || r.country === cf.country) &&
-      (!cf.org || (r.org || r.asn || '') === cf.org) &&
-      (!cf.attack_type || r.attack_type === cf.attack_type) &&
-      (!cf.service || r.service === cf.service))
+      matchFilter(cf, 'date', fmtDate(r.ts)) &&
+      matchFilter(cf, 'ip', r.src_ip) &&
+      matchFilter(cf, 'country', r.country) &&
+      matchFilter(cf, 'org', r.org || r.asn) &&
+      matchFilter(cf, 'attack_type', r.attack_type) &&
+      matchFilter(cf, 'service', r.service) &&
+      matchFilter(cf, 'severity', r.severity))
   }, [rows, cf, groupBy])
 
   const grouped = groupBy !== ''
@@ -139,12 +153,14 @@ export function Attacks({ onPick }) {
           <thead>
             <tr><th>time</th><th>ip</th><th>country</th><th>as</th><th>type</th><th>service</th><th>sev</th><th>evidence</th></tr>
             <tr className="filter-row">
-              <th></th><th></th>
+              <ColFilter rows={rows} accessor={(r) => fmtDate(r.ts)} value={cf.date || ''} onChange={setF('date')} />
+              <ColFilter rows={rows} accessor={(r) => r.src_ip} value={cf.ip || ''} onChange={setF('ip')} />
               <ColFilter rows={rows} accessor={(r) => r.country} value={cf.country || ''} onChange={setF('country')} />
               <ColFilter rows={rows} accessor={(r) => r.org || r.asn} value={cf.org || ''} onChange={setF('org')} />
               <ColFilter rows={rows} accessor={(r) => r.attack_type} value={cf.attack_type || ''} onChange={setF('attack_type')} />
               <ColFilter rows={rows} accessor={(r) => r.service} value={cf.service || ''} onChange={setF('service')} />
-              <th></th><th></th>
+              <ColFilter rows={rows} accessor={(r) => r.severity} value={cf.severity || ''} onChange={setF('severity')} />
+              <th></th>
             </tr>
           </thead>
           <tbody>{filtered.map((r) => (
@@ -173,8 +189,11 @@ export function Behavior({ onPick }) {
   }, [window])
 
   const filtered = useMemo(() => rows.filter((r) =>
-    (!cf.country || r.country === cf.country) &&
-    (!cf.org || (r.org || r.asn || '') === cf.org) &&
+    matchFilter(cf, 'ip', r.src_ip) &&
+    matchFilter(cf, 'country', r.country) &&
+    matchFilter(cf, 'org', r.org || r.asn) &&
+    matchFilter(cf, 'score', Math.round(r.threat_score)) &&
+    matchFilter(cf, 'sessions', r.sessions) &&
     (!cf.tooling || (r.tooling_hints || []).includes(cf.tooling)) &&
     (!cf.tactic || (r.tactics || []).includes(cf.tactic))
   ), [rows, cf])
@@ -193,10 +212,11 @@ export function Behavior({ onPick }) {
         <thead>
           <tr><th>ip</th><th>country</th><th>as</th><th>score</th><th>sessions</th><th>tooling</th><th>tactics</th></tr>
           <tr className="filter-row">
-            <th></th>
+            <ColFilter rows={rows} accessor={(r) => r.src_ip} value={cf.ip || ''} onChange={setF('ip')} />
             <ColFilter rows={rows} accessor={(r) => r.country} value={cf.country || ''} onChange={setF('country')} />
             <ColFilter rows={rows} accessor={(r) => r.org || r.asn} value={cf.org || ''} onChange={setF('org')} />
-            <th></th><th></th>
+            <ColFilter rows={rows} accessor={(r) => Math.round(r.threat_score)} value={cf.score || ''} onChange={setF('score')} />
+            <ColFilter rows={rows} accessor={(r) => r.sessions} value={cf.sessions || ''} onChange={setF('sessions')} />
             <ColFilter rows={rows} accessor={(r) => r.tooling_hints || []} value={cf.tooling || ''} onChange={setF('tooling')} multi />
             <ColFilter rows={rows} accessor={(r) => r.tactics || []} value={cf.tactic || ''} onChange={setF('tactic')} multi />
           </tr>
