@@ -25,8 +25,3 @@ alert tcp any any -> $HOME_NET 6379 (msg:"GETARP Redis access attempt"; \
 alert http any any -> $HOME_NET any (msg:"GETARP Suspicious HTTP path probe"; \
   flow:to_server; http.uri; pcre:"/(\.env|wp-login|phpmyadmin|\/\.git|cgi-bin|boaform|shell\?)/i"; \
   classtype:web-application-attack; sid:9000005; rev:1;)
-
-# Mirai-style telnet credential stuffing markers
-alert tcp any any -> $HOME_NET 23 (msg:"GETARP Telnet IoT botnet probe"; \
-  flow:to_server; classtype:attempted-admin; \
-  threshold:type both, track by_src, count 5, seconds 60; sid:9000006; rev:1;)
