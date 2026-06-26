@@ -67,6 +67,8 @@ def norm_cowrie(r: dict):
     eventid = r.get("eventid", "")
     e["service"] = "ssh"
     e["event_type"] = COWRIE_MAP.get(eventid, ("event", None))[0]
+    if eventid == "cowrie.client.version":
+        e["signature"] = r.get("version")
     e["raw"] = r
     if not e["ts"] or not e["src_ip"]:
         return None
