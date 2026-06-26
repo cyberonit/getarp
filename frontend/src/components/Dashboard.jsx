@@ -5,6 +5,8 @@ const scoreClass = (s) => s >= 70 ? 's-hi' : s >= 35 ? 's-mid' : 's-lo'
 
 const AS_WINDOWS = [['1h', '1h'], ['24h', '24h'], ['7d', '7d'], ['30d', '30d']]
 
+const tacticLabel = (t) => t.includes('-') ? t.split('-').slice(1).join('-') : t
+
 export default function Dashboard({ onPick }) {
   const [status, setStatus] = useState({})
   const [ips, setIps] = useState([])
@@ -13,11 +15,13 @@ export default function Dashboard({ onPick }) {
   const [asWindow, setAsWindow] = useState('1h')
   const [countries, setCountries] = useState([])
   const [cWindow, setCWindow] = useState('1h')
+  const [behavior, setBehavior] = useState([])
   const wsRef = useRef(null)
 
   async function refresh() {
     try { setStatus(await api.status()) } catch {}
     try { setIps(await api.ips()) } catch {}
+    try { setBehavior(await api.behavior('24h')) } catch {}
   }
 
   useEffect(() => {
@@ -85,6 +89,41 @@ export default function Dashboard({ onPick }) {
               </div>
             )
           })}
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 18 }}>
+        <h3><span>behavioral threats</span><span>24 h · by profile score</span></h3>
+        <div className="body">
+          {behavior.length === 0
+            ? <div className="muted">no behavioral profiles in window</div>
+            : <table>
+                <thead><tr><th>ip</th><th>class</th><th>score</th><th>logins</th><th>tooling</th><th>tactics</th><th>country</th></tr></thead>
+                <tbody>{behavior.slice(0, 10).map((b) => (
+                  <tr key={b.src_ip}>
+                    <td className="ip" onClick={() => onPick(b.src_ip)}>{b.src_ip}</td>
+                    <td><span className={`tag ${b.classification || 'prober'}`}>{b.classification || 'prober'}</span></td>
+                    <td className={`score ${scoreClass(b.threat_score)}`}>{Math.round(b.threat_score)}</td>
+                    <td>{b.login_attempts ?? 0}</td>
+                    <td>
+                      <div className="tags">
+                        {(b.tooling_hints || []).length
+                          ? (b.tooling_hints || []).map((t) => <span key={t} className="tag tooling">{t}</span>)
+                          : <span className="muted">—</span>}
+                      </div>
+                    </td>
+                    <td>
+                      <div className="tags">
+                        {(b.tactics || []).length
+                          ? (b.tactics || []).map((t) => <span key={t} className="tag tactic" title={t}>{tacticLabel(t)}</span>)
+                          : <span className="muted">—</span>}
+                      </div>
+                    </td>
+                    <td>{b.country || '—'}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+          }
         </div>
       </div>
 

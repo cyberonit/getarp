@@ -4,6 +4,8 @@ import { api } from '../lib/api.js'
 const fmt = (t) => new Date(t).toLocaleString()
 const fmtDate = (t) => t ? new Date(t).toISOString().slice(0, 10) : ''
 const WINDOWS = [['1h', '1 h'], ['24h', '24 h'], ['7d', '7 d'], ['30d', '30 d'], ['1y', '1 y']]
+const scoreClass = (s) => s >= 70 ? 's-hi' : s >= 35 ? 's-mid' : 's-lo'
+const tacticLabel = (t) => t.includes('-') ? t.split('-').slice(1).join('-') : t
 
 function uniqueVals(rows, fn) {
   return [...new Set(rows.map(fn).filter((v) => v != null && v !== '' && v !== '—'))].sort()
@@ -192,8 +194,8 @@ export function Behavior({ onPick }) {
     matchFilter(cf, 'ip', r.src_ip) &&
     matchFilter(cf, 'country', r.country) &&
     matchFilter(cf, 'org', r.org || r.asn) &&
+    matchFilter(cf, 'class', r.classification) &&
     matchFilter(cf, 'score', Math.round(r.threat_score)) &&
-    matchFilter(cf, 'sessions', r.sessions) &&
     (!cf.tooling || (r.tooling_hints || []).includes(cf.tooling)) &&
     (!cf.tactic || (r.tactics || []).includes(cf.tactic))
   ), [rows, cf])
@@ -210,13 +212,14 @@ export function Behavior({ onPick }) {
     </h3>
       <div className="body"><table>
         <thead>
-          <tr><th>ip</th><th>country</th><th>as</th><th>score</th><th>sessions</th><th>tooling</th><th>tactics</th></tr>
+          <tr><th>ip</th><th>country</th><th>as</th><th>class</th><th>score</th><th>logins</th><th>tooling</th><th>tactics</th></tr>
           <tr className="filter-row">
             <ColFilter rows={rows} accessor={(r) => r.src_ip} value={cf.ip || ''} onChange={setF('ip')} />
             <ColFilter rows={rows} accessor={(r) => r.country} value={cf.country || ''} onChange={setF('country')} />
             <ColFilter rows={rows} accessor={(r) => r.org || r.asn} value={cf.org || ''} onChange={setF('org')} />
+            <ColFilter rows={rows} accessor={(r) => r.classification} value={cf.class || ''} onChange={setF('class')} />
             <ColFilter rows={rows} accessor={(r) => Math.round(r.threat_score)} value={cf.score || ''} onChange={setF('score')} />
-            <ColFilter rows={rows} accessor={(r) => r.sessions} value={cf.sessions || ''} onChange={setF('sessions')} />
+            <th></th>
             <ColFilter rows={rows} accessor={(r) => r.tooling_hints || []} value={cf.tooling || ''} onChange={setF('tooling')} multi />
             <ColFilter rows={rows} accessor={(r) => r.tactics || []} value={cf.tactic || ''} onChange={setF('tactic')} multi />
           </tr>
@@ -224,11 +227,26 @@ export function Behavior({ onPick }) {
         <tbody>{filtered.map((r) => (
           <tr key={r.src_ip}>
             <td className="ip" onClick={() => onPick(r.src_ip)}>{r.src_ip}</td>
-            <td>{r.country || '—'}</td><td className="muted">{r.org || r.asn || '—'}</td>
-            <td className="score s-hi">{Math.round(r.threat_score)}</td>
-            <td>{r.sessions}</td>
-            <td className="muted">{(r.tooling_hints || []).join(', ') || '—'}</td>
-            <td className="muted">{(r.tactics || []).join(', ') || '—'}</td></tr>
+            <td>{r.country || '—'}</td>
+            <td className="muted">{r.org || r.asn || '—'}</td>
+            <td><span className={`tag ${r.classification || 'prober'}`}>{r.classification || 'prober'}</span></td>
+            <td className={`score ${scoreClass(r.threat_score)}`}>{Math.round(r.threat_score)}</td>
+            <td>{r.login_attempts ?? 0}</td>
+            <td>
+              <div className="tags">
+                {(r.tooling_hints || []).length
+                  ? (r.tooling_hints || []).map((t) => <span key={t} className="tag tooling">{t}</span>)
+                  : <span className="muted">—</span>}
+              </div>
+            </td>
+            <td>
+              <div className="tags">
+                {(r.tactics || []).length
+                  ? (r.tactics || []).map((t) => <span key={t} className="tag tactic" title={t}>{tacticLabel(t)}</span>)
+                  : <span className="muted">—</span>}
+              </div>
+            </td>
+          </tr>
         ))}</tbody></table></div></div>
   )
 }
