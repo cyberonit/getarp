@@ -5,8 +5,8 @@
 
 vars:
   address-groups:
-    HOME_NET: "any"          # the honeypot IS the target; everything inbound is interesting
-    EXTERNAL_NET: "any"
+    HOME_NET: "[192.0.2.1]"  # honeypot public IP; keeps !$HOME_NET rules from producing NIL ranges
+    EXTERNAL_NET: "!$HOME_NET"
     HTTP_SERVERS: "$HOME_NET"
     SMTP_SERVERS: "$HOME_NET"
     SQL_SERVERS: "$HOME_NET"
@@ -78,11 +78,13 @@ reference-config-file: /etc/suricata/reference.config
 # ───────────────────────── app layer (defaults are fine, keep common protos) ──────
 app-layer:
   protocols:
-    http: {enabled: yes}
-    ssh:  {enabled: yes}
-    tls:  {enabled: yes}
-    dns:  {enabled: yes}
-    ftp:  {enabled: yes}
+    http:   {enabled: yes}
+    ssh:    {enabled: yes}
+    tls:    {enabled: yes}
+    dns:    {enabled: yes}
+    ftp:    {enabled: yes}
+    dnp3:   {enabled: yes}
+    modbus: {enabled: yes}
 
 logging:
   default-log-level: notice
