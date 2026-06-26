@@ -43,7 +43,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://getarp.net", "https://www.getarp.net"],
     allow_methods=["GET", "POST", "PUT", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"])
+    allow_headers=["Authorization", "Content-Type", "x-csrf-token"])
 app.include_router(data.router)
 app.include_router(admin.router)
 app.include_router(crowdsec.router)
@@ -92,8 +92,7 @@ async def login(request: Request, body: LoginRequest):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "bad credentials")
     await R.delete(key)
     await audit.log(user["username"], "login", {"ip": ip})
-    token = auth.make_token(user["username"], user["role"])
-    csrf = secrets.token_urlsafe(32)
+    token, csrf = auth.make_token(user["username"], user["role"])
     resp = JSONResponse({"token_type": "bearer", "role": user["role"], "csrf_token": csrf})
     resp.set_cookie(
         COOKIE_NAME, token,

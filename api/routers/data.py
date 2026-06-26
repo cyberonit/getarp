@@ -84,7 +84,7 @@ async def ip_detail(request: Request, ip: str):
             SELECT host(i.src_ip) AS src_ip, i.first_seen, i.last_seen, i.event_count,
                    i.services_hit, i.ports_hit, i.threat_score, i.classification,
                    e.country, e.asn, e.org, e.reputation, e.categories,
-                   e.is_known_attacker, e.confidence, e.raw as enrichment_raw
+                   e.is_known_attacker, e.confidence
             FROM ips i LEFT JOIN ip_enrichment e ON e.src_ip=i.src_ip
             WHERE i.src_ip=$1""", ip)
         events = await con.fetch("""

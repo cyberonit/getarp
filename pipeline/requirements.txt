@@ -1,2 +1,2 @@
-redis==5.0.8
-asyncpg==0.29.0
+redis==8.0.1
+asyncpg==0.31.0

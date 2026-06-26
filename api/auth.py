@@ -1,6 +1,7 @@
 """JWT auth for the admin backend. Public dashboard endpoints are unauthenticated
 (read-only); settings/admin endpoints require a valid token."""
 import os
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -27,11 +28,13 @@ def verify_pw(p: str, h: str) -> bool:
     return pwd.verify(p, h)
 
 
-def make_token(sub: str, role: str) -> str:
+def make_token(sub: str, role: str) -> tuple[str, str]:
     exp = datetime.now(timezone.utc) + timedelta(minutes=EXPIRE)
     jti = uuid.uuid4().hex
-    return jwt.encode({"sub": sub, "role": role, "exp": exp, "jti": jti},
-                      SECRET, algorithm=ALGO)
+    csrf = secrets.token_urlsafe(32)
+    token = jwt.encode({"sub": sub, "role": role, "exp": exp, "jti": jti, "csrf": csrf},
+                       SECRET, algorithm=ALGO)
+    return token, csrf
 
 
 async def revoke_token(jti: str, expires_at: datetime):
@@ -101,7 +104,7 @@ async def _validate_token(raw_token: str) -> dict:
     if not row:
         raise cred_err
     return {"username": row["username"], "role": row["role"],
-            "jti": jti, "exp": payload.get("exp", 0)}
+            "jti": jti, "exp": payload.get("exp", 0), "csrf": payload.get("csrf", "")}
 
 
 COOKIE_NAME = "getarp_session"
@@ -128,6 +131,7 @@ async def require_admin(request: Request) -> dict:
     if user.get("role") != "admin":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "admin role required")
     if request.method in ("POST", "PUT", "DELETE"):
-        if not request.headers.get(CSRF_HEADER):
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "missing CSRF token")
+        csrf_header = request.headers.get(CSRF_HEADER, "")
+        if not csrf_header or csrf_header != user.get("csrf"):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "invalid CSRF token")
     return user
