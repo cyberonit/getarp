@@ -180,9 +180,14 @@ export function Attacks({ onPick }) {
 
 export function Behavior({ onPick }) {
   const [rows, setRows] = useState([])
+  const [top3, setTop3] = useState([])
   const [window, setWindow] = useState('24h')
   const [cf, setCf] = useState({})
   const setF = (k) => (v) => setCf((p) => ({ ...p, [k]: v }))
+
+  useEffect(() => {
+    api.behavior('1y', 3).then(setTop3).catch(() => {})
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -200,30 +205,26 @@ export function Behavior({ onPick }) {
     (!cf.tactic || (r.tactics || []).includes(cf.tactic))
   ), [rows, cf])
 
-  const top3 = rows.slice(0, 3)
-
   return (
     <>
     {top3.length > 0 && (
-      <div style={{ display: 'flex', gap: 14, marginBottom: 18 }}>
-        {top3.map((r, i) => (
-          <div key={r.src_ip} className="card" style={{ flex: 1, cursor: 'pointer' }} onClick={() => onPick(r.src_ip)}>
-            <h3><span>#{i + 1}</span><span className={`tag ${r.classification || 'prober'}`}>{r.classification || 'prober'}</span></h3>
-            <div className="body" style={{ paddingTop: 10 }}>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--text)', marginBottom: 6 }}>{r.src_ip}</div>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginBottom: 8 }}>{r.country || '—'} · {r.org || r.asn || '—'}</div>
-              <div style={{ display: 'flex', gap: 16, fontFamily: 'var(--mono)', fontSize: 12 }}>
-                <span><span style={{ color: 'var(--text-dim)' }}>score </span><span className={`score ${scoreClass(r.threat_score)}`}>{Math.round(r.threat_score)}</span></span>
-                <span><span style={{ color: 'var(--text-dim)' }}>logins </span>{r.login_attempts ?? 0}</span>
-              </div>
-              {(r.tactics || []).length > 0 && (
-                <div className="tags" style={{ marginTop: 8 }}>
-                  {r.tactics.map((t) => <span key={t} className="tag tactic" title={t}>{tacticLabel(t)}</span>)}
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
+      <div className="card" style={{ marginBottom: 18 }}>
+        <h3><span>top threats · all time</span></h3>
+        <div className="body"><table>
+          <thead><tr><th>#</th><th>ip</th><th>country</th><th>as</th><th>class</th><th>score</th><th>logins</th><th>tactics</th></tr></thead>
+          <tbody>{top3.map((r, i) => (
+            <tr key={r.src_ip}>
+              <td className="muted">{i + 1}</td>
+              <td className="ip" onClick={() => onPick(r.src_ip)}>{r.src_ip}</td>
+              <td>{r.country || '—'}</td>
+              <td className="muted">{r.org || r.asn || '—'}</td>
+              <td><span className={`tag ${r.classification || 'prober'}`}>{r.classification || 'prober'}</span></td>
+              <td className={`score ${scoreClass(r.threat_score)}`}>{Math.round(r.threat_score)}</td>
+              <td>{r.login_attempts ?? 0}</td>
+              <td><div className="tags">{(r.tactics || []).map((t) => <span key={t} className="tag tactic" title={t}>{tacticLabel(t)}</span>)}</div></td>
+            </tr>
+          ))}</tbody>
+        </table></div>
       </div>
     )}
     <div className="card"><h3>
