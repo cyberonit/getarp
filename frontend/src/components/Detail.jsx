@@ -109,12 +109,19 @@ export default function Detail({ ip, onClose }) {
 
               <h3 style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginTop: 18 }}>
                 RECENT EVENTS</h3>
-              <table><tbody>
-                {events.slice(0, 20).map((e, i) => (
-                  <tr key={i}><td>{e.event_type}</td><td>{e.service}</td>
-                    <td>{e.command || e.username || e.signature || ''}</td></tr>
-                ))}
-              </tbody></table>
+              {events.length === 0
+                ? <div className="muted" style={{ fontSize: 12 }}>
+                    {(info.event_count ?? 0) > 0
+                      ? 'no events in retention window'
+                      : 'no events recorded'}
+                  </div>
+                : <table><tbody>
+                    {events.slice(0, 20).map((e, i) => (
+                      <tr key={i}><td>{e.event_type}</td><td>{e.service}</td>
+                        <td>{e.command || e.username || e.signature || ''}</td></tr>
+                    ))}
+                  </tbody></table>
+              }
             </>
           )
         })()}
