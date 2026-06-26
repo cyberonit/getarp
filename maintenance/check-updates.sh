@@ -19,25 +19,22 @@ info() { echo -e "        $*"; }
 hdr()  { echo -e "\n==> $*"; }
 
 # ── 1. Python packages ────────────────────────────────────────────────────────
-hdr "Python packages (host pip)"
-OUTDATED=$(pip list --outdated --format=columns 2>/dev/null | tail -n +3 || true)
-if [[ -z "$OUTDATED" ]]; then
-    ok "All Python packages are up to date"
-else
-    while IFS= read -r line; do warn "$line"; done <<< "$OUTDATED"
-    echo
-    echo "  Pinned in requirements files — check before upgrading:"
-    grep -h "==" api/requirements.txt pipeline/requirements.txt | sort -u | while read -r pin; do
-        pkg="${pin%%[=><[![:space:]]*}"
-        pinned_ver="${pin#*==}"; pinned_ver="${pinned_ver%%[[:space:]#]*}"
-        latest_ver=$(pip index versions "$pkg" 2>/dev/null | grep -oP 'Available versions: \K[^,]+' || true)
-        if [[ -n "$latest_ver" ]]; then
-            oldest=$(printf '%s\n%s\n' "$pinned_ver" "$latest_ver" | sort -V | head -1)
-            if [[ "$oldest" == "$pinned_ver" && "$pinned_ver" != "$latest_ver" ]]; then
-                info "  $pin  <-- outdated (latest: $latest_ver)"
-            fi
+hdr "Python packages"
+PINNED_OUT=$(grep -h "==" api/requirements.txt pipeline/requirements.txt | sort -u | while read -r pin; do
+    pkg="${pin%%[=><[![:space:]]*}"
+    pinned_ver="${pin#*==}"; pinned_ver="${pinned_ver%%[[:space:]#]*}"
+    latest_ver=$(pip index versions "$pkg" 2>/dev/null | grep -oP 'Available versions: \K[^,]+' || true)
+    if [[ -n "$latest_ver" ]]; then
+        oldest=$(printf '%s\n%s\n' "$pinned_ver" "$latest_ver" | sort -V | head -1)
+        if [[ "$oldest" == "$pinned_ver" && "$pinned_ver" != "$latest_ver" ]]; then
+            echo "${pkg}==${pinned_ver}  →  ${latest_ver}"
         fi
-    done
+    fi
+done)
+if [[ -z "$PINNED_OUT" ]]; then
+    ok "All pinned packages are up to date"
+else
+    while IFS= read -r line; do warn "$line"; done <<< "$PINNED_OUT"
     if $APPLY; then
         echo
         echo "Applying upgrades to pinned requirements files..."
