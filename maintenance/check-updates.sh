@@ -28,9 +28,15 @@ else
     echo
     echo "  Pinned in requirements files — check before upgrading:"
     grep -h "==" api/requirements.txt pipeline/requirements.txt | sort -u | while read -r pin; do
-        pkg="${pin%%[=><[!]*}"
-        if echo "$OUTDATED" | grep -qi "^${pkg} "; then
-            info "  $pin  <-- outdated"
+        pkg="${pin%%[=><[![:space:]]*}"
+        pinned_ver="${pin#*==}"; pinned_ver="${pinned_ver%%[[:space:]#]*}"
+        outdated_line=$(echo "$OUTDATED" | grep -i "^${pkg} " || true)
+        if [[ -n "$outdated_line" ]]; then
+            latest_ver=$(echo "$outdated_line" | awk '{print $3}')
+            oldest=$(printf '%s\n%s\n' "$pinned_ver" "$latest_ver" | sort -V | head -1)
+            if [[ "$oldest" == "$pinned_ver" && "$pinned_ver" != "$latest_ver" ]]; then
+                info "  $pin  <-- outdated (latest: $latest_ver)"
+            fi
         fi
     done
     if $APPLY; then
