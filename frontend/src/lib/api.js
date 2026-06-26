@@ -27,7 +27,7 @@ export const api = {
     if (groupBy) p.set('group_by', groupBy)
     return get(`/attacks?${p}`)
   },
-  behavior: (window = '24h') => get(`/behavior?window=${window}`),
+  behavior: (window = '24h', limit = 100) => get(`/behavior?window=${window}&limit=${limit}`),
   map: () => get('/map'),
   topCountries: (window = '1h') => get(`/top-countries?window=${window}`),
   topAS: (window = '1h') => get(`/top-as?window=${window}`),
