@@ -30,9 +30,8 @@ else
     grep -h "==" api/requirements.txt pipeline/requirements.txt | sort -u | while read -r pin; do
         pkg="${pin%%[=><[![:space:]]*}"
         pinned_ver="${pin#*==}"; pinned_ver="${pinned_ver%%[[:space:]#]*}"
-        outdated_line=$(echo "$OUTDATED" | grep -i "^${pkg} " || true)
-        if [[ -n "$outdated_line" ]]; then
-            latest_ver=$(echo "$outdated_line" | awk '{print $3}')
+        latest_ver=$(pip index versions "$pkg" 2>/dev/null | grep -oP 'Available versions: \K[^,]+' || true)
+        if [[ -n "$latest_ver" ]]; then
             oldest=$(printf '%s\n%s\n' "$pinned_ver" "$latest_ver" | sort -V | head -1)
             if [[ "$oldest" == "$pinned_ver" && "$pinned_ver" != "$latest_ver" ]]; then
                 info "  $pin  <-- outdated (latest: $latest_ver)"
