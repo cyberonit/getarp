@@ -214,7 +214,10 @@ async def behavior(request: Request, limit: int = Query(100, ge=1, le=500),
     async with db.pool().acquire() as con:
         rows = await con.fetch(
             f"SELECT host(b.src_ip) AS src_ip, b.sessions, b.threat_score, b.tooling_hints, b.tactics, "
-            f"b.commands_seen, b.updated_at, e.country, e.asn, e.org "
+            f"b.commands_seen, b.updated_at, "
+            f"COALESCE(b.detail->>'classification', 'prober') AS classification, "
+            f"COALESCE((b.detail->>'login_attempts')::int, 0) AS login_attempts, "
+            f"e.country, e.asn, e.org "
             f"FROM behavior_profiles b LEFT JOIN ip_enrichment e ON e.src_ip=b.src_ip "
             f"WHERE b.updated_at > now() - interval '{iv}' "
             f"ORDER BY b.threat_score DESC LIMIT $1", limit)
