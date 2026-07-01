@@ -187,6 +187,10 @@ export function Behavior({ onPick }) {
 
   useEffect(() => {
     api.behavior('1y', 3).then(setTop3).catch(() => {})
+    const id = setInterval(() => {
+      api.behavior('1y', 3).then(setTop3).catch(() => {})
+    }, 24 * 60 * 60 * 1000)
+    return () => clearInterval(id)
   }, [])
 
   useEffect(() => {
