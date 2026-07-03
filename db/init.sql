@@ -189,21 +189,6 @@ ALTER TABLE events SET (
 );
 SELECT add_compression_policy('events', INTERVAL '7 days');
 
--- continuous aggregate powering fast dashboard counters
-CREATE MATERIALIZED VIEW events_5m
-WITH (timescaledb.continuous) AS
-SELECT time_bucket('5 minutes', ts) AS bucket,
-       service,
-       count(*) AS n,
-       count(DISTINCT src_ip) AS distinct_ips
-FROM events
-GROUP BY bucket, service
-WITH NO DATA;
-SELECT add_continuous_aggregate_policy('events_5m',
-    start_offset => INTERVAL '1 hour',
-    end_offset   => INTERVAL '5 minutes',
-    schedule_interval => INTERVAL '5 minutes');
-
 -- ─────────────── per-service least-privilege roles ───────────────
 -- Each backend service gets its own role with only the grants it needs.
 -- The bootstrap user (PG_USER) owns the schema; these roles are narrower.

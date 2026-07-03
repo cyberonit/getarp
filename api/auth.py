@@ -126,6 +126,15 @@ async def current_user(request: Request) -> dict:
     return await _validate_token(_extract_token(request))
 
 
+async def optional_user(request: Request) -> dict | None:
+    """Like current_user but returns None instead of raising 401.
+    For public endpoints that serve a redacted view to anonymous visitors."""
+    try:
+        return await _validate_token(_extract_token(request))
+    except HTTPException:
+        return None
+
+
 async def require_admin(request: Request) -> dict:
     user = await current_user(request)
     if user.get("role") != "admin":

@@ -140,26 +140,6 @@ function ServiceUpdates() {
   const setMsg = (svc, msg) => setMsgs((p) => ({ ...p, [svc]: msg }))
   const setBusyFlag = (svc, v) => setBusy((p) => ({ ...p, [svc]: v }))
 
-  const pull = async (svc) => {
-    setBusyFlag(svc, true); setMsg(svc, '')
-    try {
-      const r = await api.dockerPull(svc)
-      setMsg(svc, r.note || 'Done.')
-      load()
-    } catch (e) { setMsg(svc, e.message) }
-    setBusyFlag(svc, false)
-  }
-
-  const rollback = async (svc) => {
-    setBusyFlag(svc, true); setMsg(svc, '')
-    try {
-      const r = await api.dockerRollback(svc)
-      setMsg(svc, r.note || 'Rolled back.')
-      load()
-    } catch (e) { setMsg(svc, e.message) }
-    setBusyFlag(svc, false)
-  }
-
   const restart = async (svc) => {
     setBusyFlag(svc, true); setMsg(svc, '')
     try {
@@ -171,12 +151,12 @@ function ServiceUpdates() {
   }
 
   return (
-    <div className="card"><h3><span>service updates</span>
+    <div className="card"><h3><span>service versions</span>
       <span><a onClick={load}>refresh</a></span>
     </h3>
       <div className="body">
-        <p className="muted">Docker images for all services. Pull the latest image, restart,
-          or rollback to the previous version.</p>
+        <p className="muted">Docker images for all services. Restart a service here;
+          image updates are a host-side operation (see maintenance/check-updates.sh).</p>
         <table><thead><tr>
           <th>service</th><th>image</th><th>image id</th><th>status</th><th>actions</th>
         </tr></thead>
@@ -187,12 +167,8 @@ function ServiceUpdates() {
               <td className="muted">{v.image_short_id}</td>
               <td><span className={`tag ${v.status === 'running' ? 'scanner' : ''}`}>{v.status}</span></td>
               <td className="update-actions">
-                <a onClick={() => pull(v.service)}
-                  className={busy[v.service] ? 'disabled' : ''}>pull</a>
                 <a onClick={() => restart(v.service)}
                   className={busy[v.service] ? 'disabled' : ''}>restart</a>
-                <a onClick={() => rollback(v.service)}
-                  className={`rollback ${busy[v.service] ? 'disabled' : ''}`}>rollback</a>
                 {msgs[v.service] && <span className="muted" style={{ marginLeft: 8 }}>{msgs[v.service]}</span>}
               </td>
             </tr>

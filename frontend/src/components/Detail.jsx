@@ -95,7 +95,7 @@ export default function Detail({ ip, onClose }) {
                 <span className="key">tooling</span><span>{(prof.tooling_hints || []).join(', ') || '—'}</span>
                 <span className="key">tactics</span><span>{(prof.tactics || []).join(', ') || '—'}</span>
                 <span className="key">login attempts</span><span>{prof.detail?.login_attempts ?? 0}</span>
-                <span className="key">commands seen</span><span>{(prof.commands_seen || []).length}</span>
+                <span className="key">commands seen</span><span>{prof.commands_count ?? (prof.commands_seen || []).length}</span>
               </div>
 
               <IntelSources raw={info.enrichment_raw} />

@@ -37,6 +37,17 @@ GROUP = "analytics"
 CONSUMER = os.environ.get("HOSTNAME", "analytics-1")
 STATUS_CHANNEL = "status:live"
 WINDOW_KEEP_S = 300        # keep 5 min of per-IP events in memory
+PROFILE_FLUSH_S = 5        # batch profile writes instead of one per event
+
+# Classification severity, least to most severe. Persisted classifications only
+# ever escalate: in-memory profiles are lost on restart / after 24h idle, and a
+# returning attacker's fresh (low) classification must not clobber history.
+CLASS_RANK = ["unknown", "prober", "scanner", "bruteforcer", "intruder", "exploiter"]
+_ESCALATE_CLASS_SQL = (
+    "CASE WHEN COALESCE(array_position($4::text[], $2), 0)"
+    "       >= COALESCE(array_position($4::text[], classification), 0)"
+    " THEN $2 ELSE classification END"
+)
 
 
 class Engine:
@@ -49,6 +60,7 @@ class Engine:
         self.profiler = BehavioralProfiler(settings)
         self.windows: dict[str, deque] = defaultdict(lambda: deque(maxlen=2000))
         self.profiles: dict[str, dict] = defaultdict(dict)
+        self._dirty: set[str] = set()   # IPs whose profile needs persisting
         print(f"[analytics] detectors = {[d.key for d in self.detectors]}", flush=True)
 
     # ───────────────── correlation + behavioral ─────────────────
@@ -72,10 +84,10 @@ class Engine:
             except Exception as e:
                 print(f"[analytics] detector {det.key}: {str(e).replace(chr(10), ' ').replace(chr(13), '')}", flush=True)
 
-        # behavioral profile
-        prof = self.profiler.update(self.profiles[ip], ev)
-        snap = self.profiler.snapshot(ip, prof)
-        await self.persist_profile(snap)
+        # behavioral profile — persisted in batches by flush_profiles_loop to
+        # avoid two DB writes per event during brute-force floods
+        self.profiler.update(self.profiles[ip], ev)
+        self._dirty.add(ip)
 
     async def persist_finding(self, f: Finding):
         async with self.pool.acquire() as con:
@@ -87,8 +99,9 @@ class Engine:
                     f.src_ip, f.scan_type, f.ports or [], len(f.ports or []),
                     f.detail.get("window_s"), json.dumps(f.detail))
                 await con.execute(
-                    "UPDATE ips SET classification='scanner', "
-                    "threat_score=GREATEST(threat_score,30) WHERE src_ip=$1", f.src_ip)
+                    f"UPDATE ips SET classification={_ESCALATE_CLASS_SQL}, "
+                    "threat_score=GREATEST(threat_score,$3) WHERE src_ip=$1",
+                    f.src_ip, "scanner", 30.0, CLASS_RANK)
             elif f.kind == "attack":
                 await con.execute(
                     """INSERT INTO attack_events
@@ -107,6 +120,9 @@ class Engine:
              "label": f.attack_type or f.scan_type}))
 
     async def persist_profile(self, snap: dict):
+        # Merge, never overwrite: the in-memory profile restarts from zero after
+        # an engine restart or 24h-idle gc, so a plain upsert would regress
+        # sessions/commands/scores accumulated in earlier runs.
         async with self.pool.acquire() as con:
             await con.execute(
                 """INSERT INTO behavior_profiles
@@ -114,16 +130,52 @@ class Engine:
                     tactics, threat_score, detail, updated_at)
                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
                    ON CONFLICT (src_ip) DO UPDATE SET
-                     sessions=$2, avg_session_s=$3, commands_seen=$4,
-                     tooling_hints=$5, tactics=$6, threat_score=$7, detail=$8,
-                     updated_at=now()""",
+                     sessions      = GREATEST(behavior_profiles.sessions, EXCLUDED.sessions),
+                     avg_session_s = EXCLUDED.avg_session_s,
+                     commands_seen = ARRAY(SELECT DISTINCT c FROM unnest(
+                                       behavior_profiles.commands_seen || EXCLUDED.commands_seen) AS c
+                                       LIMIT 200),
+                     tooling_hints = ARRAY(SELECT DISTINCT t FROM unnest(
+                                       behavior_profiles.tooling_hints || EXCLUDED.tooling_hints) AS t),
+                     tactics       = ARRAY(SELECT DISTINCT t FROM unnest(
+                                       behavior_profiles.tactics || EXCLUDED.tactics) AS t),
+                     threat_score  = GREATEST(behavior_profiles.threat_score, EXCLUDED.threat_score),
+                     -- detail is a snapshot blob; the API only reads
+                     -- login_attempts and classification from it, so merge those
+                     detail        = behavior_profiles.detail || EXCLUDED.detail || jsonb_build_object(
+                       'login_attempts', GREATEST(
+                           COALESCE((behavior_profiles.detail->>'login_attempts')::int, 0),
+                           COALESCE((EXCLUDED.detail->>'login_attempts')::int, 0)),
+                       'classification', CASE
+                           WHEN COALESCE(array_position($9::text[], EXCLUDED.detail->>'classification'), 0)
+                             >= COALESCE(array_position($9::text[], behavior_profiles.detail->>'classification'), 0)
+                           THEN EXCLUDED.detail->>'classification'
+                           ELSE behavior_profiles.detail->>'classification' END),
+                     updated_at    = now()""",
                 snap["src_ip"], snap["sessions"], snap["avg_session_s"],
                 snap["commands_seen"], snap["tooling_hints"], snap["tactics"],
-                snap["threat_score"], json.dumps(snap))
+                snap["threat_score"], json.dumps(snap), CLASS_RANK)
             await con.execute(
-                "UPDATE ips SET classification=$2, threat_score=GREATEST(threat_score,$3) "
-                "WHERE src_ip=$1", snap["src_ip"], snap["classification"],
-                snap["threat_score"])
+                f"UPDATE ips SET classification={_ESCALATE_CLASS_SQL}, "
+                "threat_score=GREATEST(threat_score,$3) WHERE src_ip=$1",
+                snap["src_ip"], snap["classification"], snap["threat_score"],
+                CLASS_RANK)
+
+    # ───────────────── batched profile persistence ─────────────────
+    async def flush_profiles_loop(self):
+        while True:
+            await asyncio.sleep(PROFILE_FLUSH_S)
+            dirty, self._dirty = self._dirty, set()
+            for ip in dirty:
+                prof = self.profiles.get(ip)
+                if not prof:
+                    continue
+                try:
+                    await self.persist_profile(self.profiler.snapshot(ip, prof))
+                except Exception as e:
+                    print(f"[analytics] profile flush {ip}: "
+                          f"{str(e).replace(chr(10), ' ').replace(chr(13), '')}", flush=True)
+                    self._dirty.add(ip)   # retry on the next tick
 
     # ───────────────── consumer loop ─────────────────
     async def consume(self):
@@ -305,6 +357,8 @@ class Engine:
 
     @staticmethod
     def _render_html(kind, s):
+        # KEEP IN SYNC with api/routers/admin.py _render_report_html (used for
+        # regenerating existing reports); separate images, can't share a module.
         esc = html.escape
         rows = "".join(
             f"<tr><td>{esc(str(a['src_ip']))}</td><td>{esc(str(a.get('threat_score')))}</td>"
@@ -356,8 +410,8 @@ async def main():
     r = redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
     settings = await load_settings(pool)
     eng = Engine(pool, r, settings)
-    await asyncio.gather(eng.consume(), eng.status_loop(), eng.report_loop(),
-                         eng.retention_loop())
+    await asyncio.gather(eng.consume(), eng.flush_profiles_loop(), eng.status_loop(),
+                         eng.report_loop(), eng.retention_loop())
 
 
 if __name__ == "__main__":

@@ -23,6 +23,9 @@ networks:
     driver: bridge          # outbound internet for CTI lookups and CrowdSec CAPI sync
   frontend_net:
     driver: bridge
+  ops_net:
+    driver: bridge
+    internal: true          # api <-> docker-proxy only; keeps the socket proxy off data_net
 
 volumes:
   honeypot_logs:            # written by sensors, read-only to consumers
@@ -32,18 +35,22 @@ volumes:
   caddy_data:
 
 services:
-  # Restricted Docker socket proxy — only exposes container list/inspect/logs/restart.
-  # The API container talks to this instead of the raw Docker socket.
+  # Restricted Docker socket proxy — read-only container/image inspection plus
+  # container restarts, nothing else. POST stays 0 so /containers/create and
+  # /containers/{id}/exec are denied even if the API container is compromised;
+  # ALLOW_RESTARTS only whitelists /containers/{id}/(stop|restart|kill).
+  # Lives on its own internal network so only the API can reach it.
   docker-proxy:
     image: tecnativa/docker-socket-proxy:0.3
     restart: unless-stopped
-    networks: [data_net]
+    networks: [ops_net]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
-      CONTAINERS: 1
-      POST: 1
-      IMAGES: 1
+      CONTAINERS: 1           # GET /containers/* (list, inspect, logs)
+      IMAGES: 1               # GET /images/* (versions view)
+      POST: 0                 # deny all writes...
+      ALLOW_RESTARTS: 1       # ...except stop/restart/kill
       LOG_LEVEL: warning
     deploy:
       resources:
@@ -279,7 +286,7 @@ services:
   api:
     build: ./api
     restart: unless-stopped
-    networks: [data_net, frontend_net]
+    networks: [data_net, frontend_net, ops_net]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     environment:

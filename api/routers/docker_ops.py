@@ -1,8 +1,13 @@
-"""Docker management endpoints: service logs, image updates, rollback."""
+"""Docker management endpoints: service list, logs, versions, restart.
+
+Intentionally read-only apart from restarts: the docker-socket-proxy this API
+talks to (see docker-compose.yml) denies every other write, so image pulls,
+rollbacks, container creation and exec are impossible even if this container
+is compromised. Image updates are a host-side operation — see
+maintenance/check-updates.sh and `make up`.
+"""
 import asyncio
-import json
 import os
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -139,113 +144,6 @@ async def service_versions(user=Depends(require_admin)):
         out.sort(key=lambda s: s["service"])
         return out
     return await asyncio.to_thread(_versions)
-
-
-# ───────────────────── pull update ───────────────────────────
-
-@router.post("/pull/{service}")
-async def pull_update(service: str, user=Depends(require_admin)):
-    """Pull the latest image for a service and recreate its container."""
-    _validate_service(service)
-    def _pull():
-        client = _client()
-        project = _compose_project()
-        filt = {"label": [f"com.docker.compose.service={service}"]}
-        if project:
-            filt["label"].append(f"com.docker.compose.project={project}")
-        containers = client.containers.list(all=True, filters=filt)
-        if not containers:
-            return None, "service not found"
-        c = containers[0]
-        old_img = c.image
-        tags = old_img.tags
-        if not tags:
-            return None, "no image tag found — cannot pull (locally built image?)"
-
-        image_ref = tags[0]
-        old_id = old_img.id
-
-        # save rollback info
-        _save_rollback(client, service, old_id, image_ref)
-
-        # pull latest
-        repo, tag = image_ref.rsplit(":", 1) if ":" in image_ref else (image_ref, "latest")
-        new_img = client.images.pull(repo, tag=tag)
-        new_id = new_img.id
-
-        return {
-            "service": service,
-            "old_image_id": old_id[:19],
-            "new_image_id": new_id[:19],
-            "changed": old_id != new_id,
-            "image": image_ref,
-            "note": "Image pulled. Restart the service to apply."
-                    if old_id != new_id else "Already up to date.",
-        }, None
-
-    result, err = await asyncio.to_thread(_pull)
-    if err:
-        raise HTTPException(400, err)
-    await audit.log(user["username"], "docker_pull", result)
-    return result
-
-
-# ───────────────────── rollback ──────────────────────────────
-
-ROLLBACK_LABEL = "getarp.rollback"
-
-def _save_rollback(client, service, image_id, image_ref):
-    """Tag the current image so we can restore it later."""
-    try:
-        img = client.images.get(image_id)
-        rollback_tag = f"getarp-rollback/{service}:previous"
-        img.tag(rollback_tag)
-    except Exception:
-        pass
-
-
-@router.post("/rollback/{service}")
-async def rollback_service(service: str, user=Depends(require_admin)):
-    """Restore the previous image for a service."""
-    _validate_service(service)
-    def _rollback():
-        client = _client()
-        rollback_tag = f"getarp-rollback/{service}:previous"
-        try:
-            img = client.images.get(rollback_tag)
-        except Exception:
-            return None, "no rollback image found for this service"
-
-        project = _compose_project()
-        filt = {"label": [f"com.docker.compose.service={service}"]}
-        if project:
-            filt["label"].append(f"com.docker.compose.project={project}")
-        containers = client.containers.list(all=True, filters=filt)
-        if not containers:
-            return None, "service container not found"
-
-        c = containers[0]
-        current_img = c.image
-        current_tags = current_img.tags or []
-
-        if not current_tags:
-            return None, "current container has no image tag — cannot rollback"
-
-        original_tag = current_tags[0]
-        img.tag(original_tag)
-
-        return {
-            "service": service,
-            "restored_image_id": img.short_id,
-            "tag": original_tag,
-            "note": "Previous image restored. Restart the service to apply.",
-        }, None
-
-    result, err = await asyncio.to_thread(_rollback)
-    if err:
-        raise HTTPException(400, err)
-    await audit.log(user["username"], "docker_rollback", result)
-    return result
 
 
 # ───────────────────── restart service ───────────────────────

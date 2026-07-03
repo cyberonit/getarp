@@ -147,6 +147,18 @@ async def tail(path: str, queue: asyncio.Queue, sensor: str):
             # detect rotation
             try:
                 if os.stat(path).st_ino != inode:
+                    # drain lines appended to the rotated-out file after our
+                    # last read, so rotation doesn't drop events
+                    while True:
+                        line = fh.readline()
+                        if not line:
+                            break
+                        line = line.strip()
+                        if line:
+                            try:
+                                await queue.put((sensor, json.loads(line)))
+                            except json.JSONDecodeError:
+                                pass
                     fh.close()
                     fh = open(path, "r")
                     inode = os.fstat(fh.fileno()).st_ino

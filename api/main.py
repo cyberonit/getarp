@@ -8,27 +8,27 @@ import time
 from datetime import datetime, timezone
 
 import redis.asyncio as redis
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import jwt
 from jwt.exceptions import InvalidTokenError
 from pydantic import BaseModel
 from slowapi import Limiter
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 import audit
 import db
 import auth
+from ratelimit import client_ip
 from routers import data, admin, crowdsec, honeypot, docker_ops
 
 COOKIE_NAME = "getarp_session"
 CSRF_HEADER = "x-csrf-token"
 SECURE_COOKIE = os.environ.get("SECURE_COOKIE", "1") == "1"
 
-limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
+limiter = Limiter(key_func=client_ip, default_limits=["60/minute"])
 
 app = FastAPI(
     title="getarp Defence Intelligence API",
@@ -76,8 +76,7 @@ class LoginRequest(BaseModel):
 @app.post("/api/auth/login")
 @limiter.limit("10/minute")
 async def login(request: Request, body: LoginRequest):
-    ip = (request.headers.get("x-forwarded-for") or
-          (request.client.host if request.client else "unknown")).split(",")[0].strip()
+    ip = client_ip(request)
     key = f"login:fails:{ip}"
     fails = int(await R.get(key) or 0)
     if fails >= LOGIN_MAX_ATTEMPTS:
@@ -178,30 +177,53 @@ async def attack_map(request: Request):
 
 
 # ───────────────────────── WebSocket: push live events ─────────────────────────
+# The status channel only carries aggregates and attack pings already served by
+# the public REST endpoints (/api/status), so anonymous connections are allowed.
+# A ticket, when presented, must still be valid and is consumed on use.
+WS_MAX_CONNECTIONS = 200
+_ws_connections = 0
+
+
 @app.websocket("/api/ws/status")
 async def ws_status(ws: WebSocket, ticket: str = Query("")):
-    if not ticket:
-        await ws.close(code=4401, reason="missing ticket")
+    global _ws_connections
+    if ticket:
+        key = f"ws:ticket:{ticket}"
+        payload = await R.get(key)
+        if not payload:
+            await ws.close(code=4401, reason="invalid or expired ticket")
+            return
+        await R.delete(key)
+    if _ws_connections >= WS_MAX_CONNECTIONS:
+        await ws.close(code=1013, reason="too many connections")
         return
-    key = f"ws:ticket:{ticket}"
-    payload = await R.get(key)
-    if not payload:
-        await ws.close(code=4401, reason="invalid or expired ticket")
-        return
-    await R.delete(key)
 
     await ws.accept()
+    _ws_connections += 1
     pubsub = R.pubsub()
     await pubsub.subscribe(STATUS_CHANNEL)
-    try:
+
+    async def pump():
         async for msg in pubsub.listen():
             if msg.get("type") == "message":
                 await ws.send_text(msg["data"])
-    except WebSocketDisconnect:
-        pass
+
+    async def drain():
+        # Consume client frames so a close is noticed immediately instead of
+        # on the next publish (status only fires every 5 minutes).
+        while True:
+            await ws.receive_text()
+
+    tasks = [asyncio.create_task(pump()), asyncio.create_task(drain())]
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     finally:
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         await pubsub.unsubscribe(STATUS_CHANNEL)
         await pubsub.close()
+        _ws_connections -= 1
 
 
 @app.get("/api/health")

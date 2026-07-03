@@ -316,10 +316,35 @@ chmod +x /usr/local/bin/getarp-register-bouncer
 ok "Bouncer registration helper written."
 
 # ═══════════════════════════════════════════════════════════════════════════
-# STEP 7  Stub rules file + start the stack
+# STEP 7  Stub rules file + CrowdSec whitelist + start the stack
 # ═══════════════════════════════════════════════════════════════════════════
 mkdir -p "$REPO_DIR/ids/suricata/rules"
 touch "$REPO_DIR/ids/suricata/rules/suricata.rules"
+
+# crowdsec/whitelists.yaml is gitignored (it contains the operator's IP) but
+# docker-compose bind-mounts it — if it's missing, Docker would create a
+# directory in its place and break the CrowdSec parser. Generate it here from
+# ADMIN_IP; never overwrite an existing (possibly hand-edited) file.
+WHITELIST_FILE="$REPO_DIR/crowdsec/whitelists.yaml"
+if [[ ! -f "$WHITELIST_FILE" ]]; then
+    {
+    echo "name: getarp/whitelists"
+    echo "description: \"Trusted admin IPs — never alert/ban on traffic from these, regardless of what Suricata/cowrie see\""
+    echo "whitelist:"
+    echo "  reason: \"trusted admin IP (management SSH)\""
+    echo "  ip:"
+    echo "    - \"127.0.0.1\""
+    if [[ "$ADMIN_IP" == */* ]]; then
+        echo "  cidr:"
+        echo "    - \"$ADMIN_IP\""
+    else
+        echo "    - \"$ADMIN_IP\""
+    fi
+    } > "$WHITELIST_FILE"
+    ok "CrowdSec whitelist written for $ADMIN_IP."
+else
+    ok "CrowdSec whitelist already present — left untouched."
+fi
 
 info "Starting the stack (pulling images + building — may take a few minutes)..."
 cd "$REPO_DIR"

@@ -69,20 +69,6 @@ export const api = {
   dockerServices: () => get('/admin/docker/services'),
   dockerLogs: (service, lines = 150) => get(`/admin/docker/logs/${service}?lines=${lines}`),
   dockerVersions: () => get('/admin/docker/versions'),
-  async dockerPull(service) {
-    const r = await fetch(BASE + `/admin/docker/pull/${service}`, {
-      method: 'POST', headers: mutHeaders(), credentials: 'same-origin',
-    })
-    if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || 'pull failed') }
-    return r.json()
-  },
-  async dockerRollback(service) {
-    const r = await fetch(BASE + `/admin/docker/rollback/${service}`, {
-      method: 'POST', headers: mutHeaders(), credentials: 'same-origin',
-    })
-    if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || 'rollback failed') }
-    return r.json()
-  },
   async dockerRestart(service) {
     const r = await fetch(BASE + `/admin/docker/restart/${service}`, {
       method: 'POST', headers: mutHeaders(), credentials: 'same-origin',
@@ -104,14 +90,19 @@ export const api = {
   },
 
   async liveSocket(onMsg) {
-    if (!csrfToken) return null
-    const t = await fetch(BASE + '/auth/ws-ticket', {
-      method: 'POST', headers: mutHeaders(), credentials: 'same-origin',
-    })
-    if (!t.ok) return null
-    const { ticket } = await t.json()
+    // The status stream is public; a ticket is only fetched when signed in
+    // (kept for parity with authenticated sessions — the server consumes it).
+    let ticket = ''
+    if (csrfToken) {
+      try {
+        const t = await fetch(BASE + '/auth/ws-ticket', {
+          method: 'POST', headers: mutHeaders(), credentials: 'same-origin',
+        })
+        if (t.ok) ticket = (await t.json()).ticket || ''
+      } catch {}
+    }
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const url = `${proto}://${location.host}${BASE}/ws/status?ticket=${ticket}`
+    const url = `${proto}://${location.host}${BASE}/ws/status${ticket ? `?ticket=${ticket}` : ''}`
     const ws = new WebSocket(url)
     ws.onmessage = (e) => { try { onMsg(JSON.parse(e.data)) } catch {} }
     ws.onerror = () => {}

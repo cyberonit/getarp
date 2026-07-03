@@ -26,6 +26,10 @@ _STR_SETTINGS = {"enrichment_provider", "enabled_detectors"}
 ALLOWED_SETTINGS = _INT_SETTINGS | _STR_SETTINGS
 
 VALID_PROVIDERS = {"crowdsec", "abuseipdb", "greynoise", "virustotal", "abusech", "multi"}
+# Detector registry keys — keep in sync with the @register'd Detector classes
+# in analytics/correlation/. Unknown keys are silently skipped by the engine,
+# so a typo here would disable detection without any error.
+VALID_DETECTORS = {"scan", "attack"}
 
 
 class Setting(BaseModel):
@@ -43,6 +47,10 @@ def _validate_value(key: str, value: object):
     if key == "enabled_detectors":
         if not isinstance(value, str) or not value.strip():
             raise HTTPException(400, "enabled_detectors must be a non-empty comma-separated string")
+        unknown = {t.strip() for t in value.split(",") if t.strip()} - VALID_DETECTORS
+        if unknown:
+            raise HTTPException(
+                400, f"unknown detectors {sorted(unknown)}; valid: {sorted(VALID_DETECTORS)}")
 
 
 @router.get("/settings")
@@ -69,6 +77,9 @@ async def put_setting(s: Setting, user=Depends(require_admin)):
 
 
 def _render_report_html(kind: str, s: dict) -> str:
+    # KEEP IN SYNC with analytics/engine.py Engine._render_html — the analytics
+    # container renders new reports, this renders regenerations; the two services
+    # are built from separate images so the template cannot be shared as a module.
     esc = _html.escape
     rows = "".join(
         f"<tr><td>{esc(str(a['src_ip']))}</td><td>{esc(str(a.get('threat_score')))}</td>"

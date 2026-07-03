@@ -8,11 +8,11 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from slowapi import Limiter
-from slowapi.util import get_remote_address
 import auth
 import db
+from ratelimit import client_ip
 
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=client_ip)
 router = APIRouter(prefix="/api", tags=["data"])
 
 DOCS_DIR = os.environ.get("DOCS_DIR", "/app/docs")
@@ -72,9 +72,20 @@ def _redact_attack_evidence(evidence):
     return redacted
 
 
+# Raw attacker input (commands, usernames, credentials) can contain third-party
+# PII; anonymous visitors get the redacted view, authenticated operators the full one.
+_ANON_EVIDENCE_KEYS = ("command", "sample_usernames", "sample_creds")
+
+
+def _anon_evidence(evidence):
+    if not isinstance(evidence, dict):
+        return evidence
+    return {k: v for k, v in evidence.items() if k not in _ANON_EVIDENCE_KEYS}
+
+
 @router.get("/ips/{ip}")
 @limiter.limit("60/minute")
-async def ip_detail(request: Request, ip: str):
+async def ip_detail(request: Request, ip: str, user=Depends(auth.optional_user)):
     try:
         ipaddress.ip_address(ip)
     except ValueError:
@@ -84,7 +95,7 @@ async def ip_detail(request: Request, ip: str):
             SELECT host(i.src_ip) AS src_ip, i.first_seen, i.last_seen, i.event_count,
                    i.services_hit, i.ports_hit, i.threat_score, i.classification,
                    e.country, e.asn, e.org, e.reputation, e.categories,
-                   e.is_known_attacker, e.confidence
+                   e.is_known_attacker, e.confidence, e.raw AS enrichment_raw
             FROM ips i LEFT JOIN ip_enrichment e ON e.src_ip=i.src_ip
             WHERE i.src_ip=$1""", ip)
         events = await con.fetch("""
@@ -103,17 +114,25 @@ async def ip_detail(request: Request, ip: str):
     event_rows = []
     for r in events:
         row = dict(r)
-        row.pop("password", None)
+        if not user:
+            row["username"] = None
+            row["command"] = None
         event_rows.append(row)
     attack_rows = []
     for r in attacks:
         row = dict(r)
-        row["evidence"] = _redact_attack_evidence(row.get("evidence"))
+        row["evidence"] = (_redact_attack_evidence(row.get("evidence")) if user
+                           else _anon_evidence(row.get("evidence")))
         attack_rows.append(row)
+    profile = dict(prof) if prof else None
+    if profile:
+        profile["commands_count"] = len(profile.get("commands_seen") or [])
+        if not user:
+            profile["commands_seen"] = []
     return {
         "info": dict(info) if info else None,
         "events": event_rows,
-        "profile": dict(prof) if prof else None,
+        "profile": profile,
         "scans": [dict(r) for r in scans],
         "attacks": attack_rows,
     }
@@ -170,7 +189,8 @@ async def scans(request: Request, limit: int = Query(100, ge=1, le=500),
 @router.get("/attacks")
 @limiter.limit("60/minute")
 async def attacks(request: Request, limit: int = Query(100, ge=1, le=500),
-                  window: str = Query("24h"), group_by: str = Query("")):
+                  window: str = Query("24h"), group_by: str = Query(""),
+                  user=Depends(auth.optional_user)):
     intervals = {"1h": "1 hour", "24h": "24 hours", "7d": "7 days", "30d": "30 days", "1y": "1 year"}
     iv = intervals.get(window)
     if not iv:
@@ -200,7 +220,13 @@ async def attacks(request: Request, limit: int = Query(100, ge=1, le=500),
             f"e.country, e.asn, e.org "
             f"FROM attack_events a LEFT JOIN ip_enrichment e ON e.src_ip=a.src_ip "
             f"{time_filter} ORDER BY a.ts DESC LIMIT $1", limit)
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        row = dict(r)
+        row["evidence"] = (_redact_attack_evidence(row.get("evidence")) if user
+                           else _anon_evidence(row.get("evidence")))
+        out.append(row)
+    return out
 
 
 @router.get("/behavior")
@@ -214,7 +240,7 @@ async def behavior(request: Request, limit: int = Query(100, ge=1, le=500),
     async with db.pool().acquire() as con:
         rows = await con.fetch(
             f"SELECT host(b.src_ip) AS src_ip, b.sessions, b.threat_score, b.tooling_hints, b.tactics, "
-            f"b.commands_seen, b.updated_at, "
+            f"COALESCE(array_length(b.commands_seen, 1), 0) AS commands_count, b.updated_at, "
             f"COALESCE(b.detail->>'classification', 'prober') AS classification, "
             f"COALESCE((b.detail->>'login_attempts')::int, 0) AS login_attempts, "
             f"e.country, e.asn, e.org "
@@ -273,7 +299,9 @@ async def reports(request: Request, limit: int = Query(30, ge=1, le=100)):
 async def report_html(request: Request, rid: int = Path(ge=1, le=2_147_483_647)):
     async with db.pool().acquire() as con:
         row = await con.fetchrow("SELECT html, summary FROM reports WHERE id=$1", rid)
-    return {"html": row["html"] if row else "", "summary": row["summary"] if row else {}}
+    if not row:
+        raise HTTPException(404, "not found")
+    return {"html": row["html"], "summary": row["summary"] or {}}
 
 
 # Cell values starting with these characters are interpreted as formulas by
@@ -320,7 +348,7 @@ async def report_csv(request: Request, rid: int = Path(ge=1, le=2_147_483_647)):
     w.writerow(["ATTACKS BY TYPE"])
     w.writerow(["attack_type", "count"])
     for a in summary.get("attacks_by_type", []):
-        w.writerow([a.get("attack_type"), a.get("n")])
+        w.writerow(_csv_row([a.get("attack_type"), a.get("n")]))
     w.writerow([])
 
     # Top attackers
