@@ -214,12 +214,17 @@ async def attacks(request: Request, limit: int = Query(100, ge=1, le=500),
                 f"GROUP BY e.asn, e.org ORDER BY n DESC LIMIT $1", limit)
         return [dict(r) for r in rows]
 
+    # Collapse repeated (ip, type, service) bursts into one row so a single
+    # noisy attacker can't push everything else past the row limit.
     async with db.pool().acquire() as con:
         rows = await con.fetch(
-            f"SELECT a.id, a.ts, host(a.src_ip) AS src_ip, a.attack_type, a.service, a.severity, a.evidence, "
+            f"SELECT max(a.ts) AS ts, min(a.ts) AS first_ts, count(*) AS n, "
+            f"host(a.src_ip) AS src_ip, a.attack_type, a.service, max(a.severity) AS severity, "
+            f"(array_agg(a.evidence ORDER BY a.ts DESC))[1] AS evidence, "
             f"e.country, e.asn, e.org "
             f"FROM attack_events a LEFT JOIN ip_enrichment e ON e.src_ip=a.src_ip "
-            f"{time_filter} ORDER BY a.ts DESC LIMIT $1", limit)
+            f"{time_filter} GROUP BY a.src_ip, a.attack_type, a.service, e.country, e.asn, e.org "
+            f"ORDER BY ts DESC LIMIT $1", limit)
     out = []
     for r in rows:
         row = dict(r)

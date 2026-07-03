@@ -153,7 +153,7 @@ export function Attacks({ onPick }) {
           ))}</tbody>
         </>) : (<>
           <thead>
-            <tr><th>time</th><th>ip</th><th>country</th><th>as</th><th>type</th><th>service</th><th>sev</th><th>evidence</th></tr>
+            <tr><th>last seen</th><th>ip</th><th>country</th><th>as</th><th>type</th><th>service</th><th>sev</th><th>count</th><th>evidence</th></tr>
             <tr className="filter-row">
               <ColFilter rows={rows} accessor={(r) => fmtDate(r.ts)} value={cf.date || ''} onChange={setF('date')} />
               <ColFilter rows={rows} accessor={(r) => r.src_ip} value={cf.ip || ''} onChange={setF('ip')} />
@@ -163,14 +163,17 @@ export function Attacks({ onPick }) {
               <ColFilter rows={rows} accessor={(r) => r.service} value={cf.service || ''} onChange={setF('service')} />
               <ColFilter rows={rows} accessor={(r) => r.severity} value={cf.severity || ''} onChange={setF('severity')} />
               <th></th>
+              <th></th>
             </tr>
           </thead>
           <tbody>{filtered.map((r) => (
-            <tr key={r.id}><td className="muted">{fmt(r.ts)}</td>
+            <tr key={`${r.src_ip}|${r.attack_type}|${r.service}`}>
+              <td className="muted" title={r.n > 1 ? `first: ${fmt(r.first_ts)}` : undefined}>{fmt(r.ts)}</td>
               <td className="ip" onClick={() => onPick(r.src_ip)}>{r.src_ip}</td>
               <td>{r.country || '—'}</td><td className="muted">{r.org || r.asn || '—'}</td>
               <td><span className="tag exploiter">{r.attack_type}</span></td>
               <td>{r.service || '—'}</td><td>{r.severity}</td>
+              <td>{r.n > 1 ? `×${r.n}` : ''}</td>
               <td className="muted">{JSON.stringify(r.evidence).slice(0, 70)}</td></tr>
           ))}</tbody>
         </>)}
