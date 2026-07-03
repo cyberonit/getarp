@@ -267,27 +267,29 @@ class Engine:
     async def _blocked_ips_count(self, span: str) -> int:
         async with self.pool.acquire() as con:
             return await con.fetchval(
-                "SELECT count(*) FROM ip_enrichment e JOIN ips i ON i.src_ip = e.src_ip "
-                "WHERE e.is_known_attacker = true AND i.last_seen > now()-$1::interval", span)
+                f"SELECT count(*) FROM ip_enrichment e JOIN ips i ON i.src_ip = e.src_ip "
+                f"WHERE e.is_known_attacker = true AND i.last_seen > now() - interval '{span}'")
 
     async def build_report(self, kind: str, span: str):
+        # asyncpg can't bind strings as interval; span is an internal constant
+        # (never user input), so it's safe to inline as a literal.
         blocked = await self._blocked_ips_count(span)
         async with self.pool.acquire() as con:
             total = await con.fetchval(
-                "SELECT count(*) FROM events WHERE ts > now()-$1::interval", span)
+                f"SELECT count(*) FROM events WHERE ts > now() - interval '{span}'")
             ips = await con.fetchval(
-                "SELECT count(DISTINCT src_ip) FROM events WHERE ts > now()-$1::interval", span)
+                f"SELECT count(DISTINCT src_ip) FROM events WHERE ts > now() - interval '{span}'")
             scans = await con.fetchval(
-                "SELECT count(*) FROM ips WHERE classification IN ('scanner','prober') "
-                "AND last_seen > now()-$1::interval", span)
+                f"SELECT count(*) FROM ips WHERE classification IN ('scanner','prober') "
+                f"AND last_seen > now() - interval '{span}'")
             attacks = await con.fetch(
-                "SELECT attack_type, count(*) n FROM attack_events "
-                "WHERE ts > now()-$1::interval GROUP BY attack_type ORDER BY n DESC", span)
+                f"SELECT attack_type, count(*) n FROM attack_events "
+                f"WHERE ts > now() - interval '{span}' GROUP BY attack_type ORDER BY n DESC")
             top = await con.fetch(
-                "SELECT i.src_ip, i.threat_score, i.classification, e.country, e.asn, e.org "
-                "FROM ips i LEFT JOIN ip_enrichment e ON e.src_ip=i.src_ip "
-                "WHERE i.last_seen > now()-$1::interval "
-                "ORDER BY i.threat_score DESC LIMIT 20", span)
+                f"SELECT i.src_ip, i.threat_score, i.classification, e.country, e.asn, e.org "
+                f"FROM ips i LEFT JOIN ip_enrichment e ON e.src_ip=i.src_ip "
+                f"WHERE i.last_seen > now() - interval '{span}' "
+                f"ORDER BY i.threat_score DESC LIMIT 20")
             summary = {
                 "events": total, "unique_ips": ips, "scans": scans,
                 "blocked_ips": blocked,
@@ -296,9 +298,9 @@ class Engine:
             }
             html = self._render_html(kind, summary)
             await con.execute(
-                "INSERT INTO reports (period_from, period_to, kind, summary, html) "
-                "VALUES (now()-$1::interval, now(), $2, $3, $4)",
-                span, kind, json.dumps(summary, default=str), html)
+                f"INSERT INTO reports (period_from, period_to, kind, summary, html) "
+                f"VALUES (now() - interval '{span}', now(), $1, $2, $3)",
+                kind, json.dumps(summary, default=str), html)
         print(f"[analytics] {kind} report built", flush=True)
 
     @staticmethod
