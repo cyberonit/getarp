@@ -170,7 +170,8 @@ export function Attacks({ onPick }) {
             <tr key={`${r.src_ip}|${r.attack_type}|${r.service}`}>
               <td className="muted" title={r.n > 1 ? `first: ${fmt(r.first_ts)}` : undefined}>{fmt(r.ts)}</td>
               <td className="ip" onClick={() => onPick(r.src_ip)}>{r.src_ip}</td>
-              <td>{r.country || '—'}</td><td className="muted">{r.org || r.asn || '—'}</td>
+              <td>{r.country || '—'}</td>
+              <td className="muted org" title={r.org || r.asn || undefined}>{r.org || r.asn || '—'}</td>
               <td><span className="tag exploiter">{r.attack_type}</span></td>
               <td>{r.service || '—'}</td><td>{r.severity}</td>
               <td>{r.n > 1 ? `×${r.n}` : ''}</td>
@@ -224,7 +225,7 @@ export function Behavior({ onPick }) {
               <td className="muted">{i + 1}</td>
               <td className="ip" onClick={() => onPick(r.src_ip)}>{r.src_ip}</td>
               <td>{r.country || '—'}</td>
-              <td className="muted">{r.org || r.asn || '—'}</td>
+              <td className="muted org" title={r.org || r.asn || undefined}>{r.org || r.asn || '—'}</td>
               <td><span className={`tag ${r.classification || 'prober'}`}>{r.classification || 'prober'}</span></td>
               <td className={`score ${scoreClass(r.threat_score)}`}>{Math.round(r.threat_score)}</td>
               <td>{r.login_attempts ?? 0}</td>
@@ -261,7 +262,7 @@ export function Behavior({ onPick }) {
           <tr key={r.src_ip}>
             <td className="ip" onClick={() => onPick(r.src_ip)}>{r.src_ip}</td>
             <td>{r.country || '—'}</td>
-            <td className="muted">{r.org || r.asn || '—'}</td>
+            <td className="muted org" title={r.org || r.asn || undefined}>{r.org || r.asn || '—'}</td>
             <td><span className={`tag ${r.classification || 'prober'}`}>{r.classification || 'prober'}</span></td>
             <td className={`score ${scoreClass(r.threat_score)}`}>{Math.round(r.threat_score)}</td>
             <td>{r.login_attempts ?? 0}</td>

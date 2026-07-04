@@ -110,13 +110,16 @@ tr:hover td { background: rgba(255,255,255,.015); }
 .score { font-weight:600; }
 .s-hi{color:var(--hot)} .s-mid{color:var(--warn)} .s-lo{color:var(--text-dim)}
 .tag { font-family: var(--mono); font-size: 10px; padding: 2px 7px; border-radius: 5px;
-  border: 1px solid var(--line); color: var(--text-dim); }
+  border: 1px solid var(--line); color: var(--text-dim);
+  display: inline-block; white-space: nowrap; }
 .tag.scanner{color:var(--ours);border-color:var(--ours-dim)}
 .tag.exploiter,.tag.intruder{color:var(--hot);border-color:var(--hot-dim)}
 .tag.bruteforcer{color:var(--warn)}
 .tag.tactic{color:var(--ours);border-color:var(--ours-dim);font-size:9px}
 .tag.tooling{color:var(--warn);border-color:#5a4010;font-size:9px}
-.tags{display:flex;flex-wrap:wrap;gap:3px;align-items:center}
+.tags{display:flex;flex-wrap:wrap;gap:3px;align-items:center;min-width:80px}
+td.org { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+td.ip, td.score { white-space: nowrap; }
 
 /* geo bars */
 .geo .row { display:flex; align-items:center; gap:10px; margin: 4px 0; font-family:var(--mono); font-size:12px;}
