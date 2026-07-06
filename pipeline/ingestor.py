@@ -160,10 +160,19 @@ async def tail(path: str, queue: asyncio.Queue, sensor: str):
                             except json.JSONDecodeError:
                                 pass
                     fh.close()
+                    # the new file may not exist yet right after rotation —
+                    # wait for it instead of crashing on a closed handle
+                    while not os.path.exists(path):
+                        await asyncio.sleep(1)
                     fh = open(path, "r")
                     inode = os.fstat(fh.fileno()).st_ino
             except FileNotFoundError:
                 await asyncio.sleep(1)
+                if fh.closed:
+                    while not os.path.exists(path):
+                        await asyncio.sleep(1)
+                    fh = open(path, "r")
+                    inode = os.fstat(fh.fileno()).st_ino
     finally:
         fh.close()
 

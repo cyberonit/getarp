@@ -224,6 +224,17 @@ async def make_server(handler, port):
 
 async def main():
     os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+    # Fail fast if the log file is not writable (e.g. stale file owned by a
+    # different uid after an image upgrade). A silent PermissionError per
+    # connection means days of lost telemetry with a healthy-looking container;
+    # crashing here puts the failure in `make ps` / restart loop instead.
+    try:
+        with open(LOG_PATH, "a"):
+            pass
+    except OSError as e:
+        raise SystemExit(
+            f"[extra-services] cannot write {LOG_PATH}: {e} — "
+            f"fix ownership/permissions on the honeypot_logs volume") from e
     listeners = [
         (handle_http, 8080),
         (handle_http, 8081),

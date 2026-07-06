@@ -283,21 +283,25 @@ class Engine:
         print(f"[analytics] status: {level} active={snap['active_attackers']}", flush=True)
 
     # ───────────────── retention cleanup for non-hypertables ─────────────────
+    # 3-year horizon, matching the hypertable retention policies in db/init.sql.
+    # Deleting from ips cascades to ip_enrichment (FK ON DELETE CASCADE).
+    RETENTION = "3 years"
+
     async def retention_loop(self):
         while True:
             await asyncio.sleep(86400)
             try:
                 async with self.pool.acquire() as con:
                     await con.execute(
-                        "DELETE FROM scan_events WHERE ts < now() - interval '90 days'")
+                        f"DELETE FROM scan_events WHERE ts < now() - interval '{self.RETENTION}'")
                     await con.execute(
-                        "DELETE FROM attack_events WHERE ts < now() - interval '90 days'")
+                        f"DELETE FROM attack_events WHERE ts < now() - interval '{self.RETENTION}'")
                     await con.execute(
-                        "DELETE FROM behavior_profiles WHERE updated_at < now() - interval '90 days'")
+                        f"DELETE FROM behavior_profiles WHERE updated_at < now() - interval '{self.RETENTION}'")
                     await con.execute(
-                        "DELETE FROM ips WHERE last_seen < now() - interval '180 days'")
+                        f"DELETE FROM ips WHERE last_seen < now() - interval '{self.RETENTION}'")
                     await con.execute(
-                        "DELETE FROM reports WHERE created_at < now() - interval '365 days'")
+                        f"DELETE FROM reports WHERE created_at < now() - interval '{self.RETENTION}'")
                 print("[analytics] retention cleanup done", flush=True)
             except Exception as e:
                 print(f"[analytics] retention: {e}", flush=True)

@@ -316,6 +316,12 @@ chmod +x /usr/local/bin/getarp-register-bouncer
 ok "Bouncer registration helper written."
 
 # ═══════════════════════════════════════════════════════════════════════════
+# STEP 6b  Sensor log rotation (eve.json/fast.log grow unbounded otherwise)
+# ═══════════════════════════════════════════════════════════════════════════
+install -m 755 "$REPO_DIR/deploy/rotate-logs.sh" /etc/cron.daily/getarp-logs
+ok "Daily log rotation installed (/etc/cron.daily/getarp-logs)."
+
+# ═══════════════════════════════════════════════════════════════════════════
 # STEP 7  Stub rules file + CrowdSec whitelist + start the stack
 # ═══════════════════════════════════════════════════════════════════════════
 mkdir -p "$REPO_DIR/ids/suricata/rules"

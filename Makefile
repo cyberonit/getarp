@@ -50,7 +50,7 @@ rules:
 
 bouncer:
 	@echo "Registering host firewall bouncer with CrowdSec LAPI..."
-	sudo bash /usr/local/bin/getarp-register-bouncer.sh
+	sudo bash /usr/local/bin/getarp-register-bouncer
 
 enroll:
 	docker compose exec crowdsec cscli console enroll $(T)

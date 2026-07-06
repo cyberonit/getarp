@@ -168,18 +168,11 @@ CREATE TABLE audit_log (
 CREATE INDEX idx_audit_ts ON audit_log (ts DESC);
 
 -- ─────────────── retention (tune for your legal/PII requirements) ───────────────
-SELECT add_retention_policy('events', INTERVAL '90 days');
-SELECT add_retention_policy('status_snapshots', INTERVAL '180 days');
-
--- retention for analytics tables that otherwise grow unbounded
-DO $$
-BEGIN
-    -- scan_events / attack_events: keep 90 days to match events
-    IF NOT EXISTS (SELECT 1 FROM timescaledb_information.jobs
-                   WHERE hypertable_name = 'scan_events') THEN
-        PERFORM NULL;  -- not a hypertable; use pg_cron or app-level cleanup
-    END IF;
-END $$;
+-- 3-year retention target; see docs/CAPACITY.md for the disk model.
+-- Non-hypertables (scan_events, attack_events, ips, behavior_profiles, reports)
+-- are cleaned by analytics/engine.py retention_loop with the same 3-year horizon.
+SELECT add_retention_policy('events', INTERVAL '3 years');
+SELECT add_retention_policy('status_snapshots', INTERVAL '3 years');
 
 -- compress chunks older than 7 days (events are read-mostly past that point)
 ALTER TABLE events SET (
@@ -234,9 +227,11 @@ BEGIN
         END IF;
         GRANT USAGE ON SCHEMA public TO svc_analytics;
         GRANT SELECT ON events TO svc_analytics;
-        GRANT SELECT, INSERT ON scan_events, attack_events, status_snapshots, reports TO svc_analytics;
-        GRANT SELECT, INSERT, UPDATE ON behavior_profiles TO svc_analytics;
-        GRANT SELECT, UPDATE ON ips TO svc_analytics;
+        -- DELETE: retention_loop in analytics/engine.py prunes these tables
+        GRANT SELECT, INSERT, DELETE ON scan_events, attack_events, reports TO svc_analytics;
+        GRANT SELECT, INSERT ON status_snapshots TO svc_analytics;
+        GRANT SELECT, INSERT, UPDATE, DELETE ON behavior_profiles TO svc_analytics;
+        GRANT SELECT, UPDATE, DELETE ON ips TO svc_analytics;
         GRANT SELECT ON ip_enrichment TO svc_analytics;
         GRANT SELECT ON settings TO svc_analytics;
         GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO svc_analytics;
