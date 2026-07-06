@@ -2,7 +2,7 @@
 
 **Author:** Security Architecture (15y) + 2 senior engineers
 **Status:** PoC / v0.4
-**Target:** Single VM, 8 vCPU / 64 GB RAM, domain `getarp.net`
+**Target:** Single VM, 4 vCPU / 8 GB RAM / 100 GB disk, domain `getarp.net`
 
 ---
 
@@ -37,7 +37,7 @@ network path from a popped honeypot into your intelligence database.
                  └───────────────┬────────────────┘
                                  │
    ┌─────────────────────────────┼──────────────────────────────────────┐
-   │  VM (8 vCPU / 64 GB)         │                                       │
+   │  VM (4 vCPU / 8 GB)          │                                       │
    │                             │                                       │
    │  ┌─────────── honeypot_net (ISOLATED, no egress to data) ────────┐  │
    │  │  Cowrie (SSH 22)               Extra-Services emulator        │  │
@@ -180,21 +180,58 @@ module that wants the full command transcript).
   or lift the whole `data_net` tier to a second VM and point the pipeline's Redis at it.
   Postgres → managed PG; Cowrie → multiple sensors writing to the same bus.
 
-## 8. Resource budget (8 vCPU / 64 GB)
+## 8. Capacity plan (4 vCPU / 8 GB / 100 GB, 3-year retention)
 
-| Service | CPU (cores) | RAM | Notes |
+Sized from **measured production rates** (23 days of live traffic, June–July 2026);
+the full disk model and its assumptions live in [`docs/CAPACITY.md`](CAPACITY.md).
+
+### CPU / RAM budget
+
+Compose limits are caps, not reservations; measured steady-state for the whole
+stack is **~2.5 GB RAM and <10% of one core**, so 4 vCPU / 8 GB carries a large
+burst margin (worst observed day: 171K events, ~50× steady state).
+
+| Service | CPU limit | RAM limit | Measured (steady state) |
 |---|---|---|---|
-| Suricata | 1.5 | 2–4 GB | Honeypot traffic is low-volume; cap AF_PACKET threads |
-| Cowrie + Extra | 0.5 | 1 GB | Mostly idle, spikes on scans |
-| CrowdSec + bouncer | 0.5 | 1 GB | |
-| Postgres/TimescaleDB | 2 | 8–16 GB | `shared_buffers` 8 GB, room for retention |
-| Redis | 0.25 | 1 GB | Streams trimmed |
-| Pipeline / Enrichment / Analytics | 1.5 | 3 GB | |
-| API + Frontend + Caddy | 0.5 | 1 GB | |
-| **Reserved for future AI module** | ~1.25 | ~30 GB | Headroom is deliberate |
+| Suricata | 1.5 | 2 GB | ~50 MB (`detect.profile: low`, 2 AF_PACKET threads) |
+| Cowrie + Extra | 1.0 | 1 GB | ~180 MB |
+| CrowdSec (LAPI) | 0.5 | 1 GB | ~220 MB |
+| Postgres/TimescaleDB | 2 | 4 GB | ~1.2 GB |
+| Redis | 0.25 | 1 GB | ~15 MB (streams trimmed via MAXLEN) |
+| Pipeline / Enrichment / Analytics | 2 | 4 GB | ~230 MB combined |
+| API + Frontend + Caddy + docker-proxy | 2 | 3.4 GB | ~130 MB combined |
 
-Plenty of slack — the box is comfortably oversized for PoC traffic, which is the right
-call so the future AI/correlation work has somewhere to land.
+A future AI module does not fit in the remaining RAM on this size — plan for a
+VM upgrade or remote inference when that lands. Add 2–4 GB swap as an OOM
+safety net.
+
+### Disk budget — 3 years of data retention
+
+Postgres is the system of record. Raw sensor logs are rotated daily
+(`/etc/cron.daily/getarp-logs`, installed by `deploy/setup.sh`) and kept 14
+days gzipped for forensics; without rotation `eve.json` alone would reach
+~71 GB over 3 years.
+
+Projection at 3× the measured steady-state rate (10K events/day, 300 new
+IPs/day):
+
+| Component | 3-year size |
+|---|---|
+| `events` hypertable (columnar-compressed after 7 days, ~5×) | ~3 GB |
+| `attack_events` + `scan_events` | ~1.5 GB |
+| `ips` + `ip_enrichment` (~330K IPs, raw provider JSONB) | ~3 GB |
+| `status_snapshots`, profiles, reports, audit | ~1.5 GB |
+| WAL / bloat / vacuum headroom (×1.5) | → **~13 GB DB total** |
+| Rotated sensor logs (14-day gzipped keep) | ~2 GB |
+| Docker images + build cache + capped container logs | ~15 GB |
+| OS + packages + journal | ~10 GB |
+| **Working set → provision** | **~50 GB → 100 GB disk** |
+
+Retention is enforced in three places: TimescaleDB retention policies
+(`events`, `status_snapshots` — 3 years, `db/init.sql`), the nightly
+`retention_loop` in `analytics/engine.py` for the plain tables (same horizon),
+and the log-rotation cron. Alert at 70% disk; pressure-relief levers (drop
+flow/dns from eve-log, trim enrichment raw JSONB) are listed in `CAPACITY.md`.
 
 ## 9. Security model (beyond the isolation principle)
 
@@ -209,8 +246,10 @@ call so the future AI/correlation work has somewhere to land.
 - **Secrets** via `.env` / Docker secrets, never in images. JWT secret + DB creds +
   provider API keys are all env-injected.
 - **Retention & PII:** captured payloads can contain attacker (and occasionally third
-  party) data. Set retention windows in `db/init.sql` Timescale policies; document
-  lawful basis since this is "Defence Intelligence."
+  party) data. Retention is 3 years across the database (Timescale policies in
+  `db/init.sql` + the analytics retention loop — see §8); passwords are redacted
+  to length hints before storage. Document lawful basis since this is "Defence
+  Intelligence."
 
 ## 10. Live status & reporting
 
