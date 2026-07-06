@@ -226,18 +226,21 @@ async def consumer(queue: asyncio.Queue, pool, r):
 
 
 async def _upsert_ip(con, e) -> bool:
+    # dst_port may be NULL (most cowrie events don't carry it) — record no port
+    # rather than a fabricated one
     row = await con.fetchrow(
         """INSERT INTO ips (src_ip, services_hit, ports_hit, event_count)
-           VALUES ($1, ARRAY[$2]::text[], ARRAY[$3]::int[], 1)
+           VALUES ($1, ARRAY[$2]::text[],
+                   CASE WHEN $3::int IS NULL THEN '{}'::int[] ELSE ARRAY[$3]::int[] END, 1)
            ON CONFLICT (src_ip) DO UPDATE SET
              last_seen = now(),
              event_count = ips.event_count + 1,
              services_hit = CASE WHEN $2 = ANY(ips.services_hit) THEN ips.services_hit
                                   ELSE ips.services_hit || $2::text END,
-             ports_hit = CASE WHEN $3 = ANY(ips.ports_hit) THEN ips.ports_hit
+             ports_hit = CASE WHEN $3::int IS NULL OR $3 = ANY(ips.ports_hit) THEN ips.ports_hit
                               ELSE ips.ports_hit || $3::int END
            RETURNING (xmax = 0) AS inserted""",
-        e["src_ip"], e["service"] or "tcp", e["dst_port"] or 0,
+        e["src_ip"], e["service"] or "tcp", e["dst_port"],
     )
     return bool(row and row["inserted"])
 
