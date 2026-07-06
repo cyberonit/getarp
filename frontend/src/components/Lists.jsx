@@ -5,7 +5,21 @@ const fmt = (t) => new Date(t).toLocaleString()
 const fmtDate = (t) => t ? new Date(t).toISOString().slice(0, 10) : ''
 const WINDOWS = [['1h', '1 h'], ['24h', '24 h'], ['7d', '7 d'], ['30d', '30 d'], ['1y', '1 y']]
 const scoreClass = (s) => s >= 70 ? 's-hi' : s >= 35 ? 's-mid' : 's-lo'
-const tacticLabel = (t) => t.includes('-') ? t.split('-').slice(1).join('-') : t
+const tacticLabel = (t) => t.includes('-') ? `${t.split('-')[0]} · ${t.split('-').slice(1).join('-')}` : t
+
+// mirror of TACTIC_MAP in analytics/behavioral/profiler.py — keep in sync
+export const TOOLING_TA = {
+  recon: 'TA0007-Discovery',
+  wget_dropper: 'TA0011-C2/Download',
+  shell_dropper: 'TA0011-C2/Download',
+  mirai: 'TA0002-Execution',
+  cryptominer: 'TA0040-Impact',
+  hydra: 'TA0006-CredentialAccess',
+  persistence: 'TA0003-Persistence',
+  privesc: 'TA0004-PrivEscalation',
+  cleanup: 'TA0005-DefenseEvasion',
+}
+export const toolingLabel = (t) => TOOLING_TA[t] ? `${t} · ${TOOLING_TA[t].split('-')[0]}` : t
 
 function uniqueVals(rows, fn) {
   return [...new Set(rows.map(fn).filter((v) => v != null && v !== '' && v !== '—'))].sort()
@@ -269,7 +283,7 @@ export function Behavior({ onPick }) {
             <td>
               <div className="tags">
                 {(r.tooling_hints || []).length
-                  ? (r.tooling_hints || []).map((t) => <span key={t} className="tag tooling">{t}</span>)
+                  ? (r.tooling_hints || []).map((t) => <span key={t} className="tag tooling" title={TOOLING_TA[t]}>{toolingLabel(t)}</span>)
                   : <span className="muted">—</span>}
               </div>
             </td>
