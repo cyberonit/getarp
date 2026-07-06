@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
-import { toolingLabel } from './Lists.jsx'
 
 const REP_COLOR = { malicious: '#f87171', suspicious: '#fb923c', clean: '#4ade80', unknown: '#6b7280' }
 
@@ -93,7 +92,7 @@ export default function Detail({ ip, onClose }) {
                 <span className="key">events</span><span>{info.event_count ?? 0}</span>
                 <span className="key">services hit</span><span>{(info.services_hit || []).join(', ')}</span>
                 <span className="key">ports hit</span><span>{(info.ports_hit || []).join(', ')}</span>
-                <span className="key">tooling</span><span>{(prof.tooling_hints || []).map(toolingLabel).join(', ') || '—'}</span>
+                <span className="key">tooling</span><span>{(prof.tooling_hints || []).join(', ') || '—'}</span>
                 <span className="key">tactics</span><span>{(prof.tactics || []).join(', ') || '—'}</span>
                 <span className="key">login attempts</span><span>{prof.detail?.login_attempts ?? 0}</span>
                 <span className="key">commands seen</span><span>{prof.commands_count ?? (prof.commands_seen || []).length}</span>

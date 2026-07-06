@@ -7,19 +7,23 @@ const WINDOWS = [['1h', '1 h'], ['24h', '24 h'], ['7d', '7 d'], ['30d', '30 d'],
 const scoreClass = (s) => s >= 70 ? 's-hi' : s >= 35 ? 's-mid' : 's-lo'
 const tacticLabel = (t) => t.includes('-') ? `${t.split('-')[0]} · ${t.split('-').slice(1).join('-')}` : t
 
-// mirror of TACTIC_MAP in analytics/behavioral/profiler.py — keep in sync
-export const TOOLING_TA = {
-  recon: 'TA0007-Discovery',
-  wget_dropper: 'TA0011-C2/Download',
-  shell_dropper: 'TA0011-C2/Download',
-  mirai: 'TA0002-Execution',
-  cryptominer: 'TA0040-Impact',
-  hydra: 'TA0006-CredentialAccess',
-  persistence: 'TA0003-Persistence',
-  privesc: 'TA0004-PrivEscalation',
-  cleanup: 'TA0005-DefenseEvasion',
+// MITRE ATT&CK technique (T) codes for the tooling hints emitted by
+// analytics/behavioral/profiler.py — keep in sync with TOOLING_SIGNS there.
+// None of these tools have an S (software) code in the ATT&CK catalog,
+// so each maps to the technique it implements.
+export const TOOLING_MITRE = {
+  masscan: ['T1595.001', 'Active Scanning: Scanning IP Blocks'],
+  hydra: ['T1110', 'Brute Force'],
+  mirai: ['T1059.004', 'Command and Scripting Interpreter: Unix Shell'],
+  cryptominer: ['T1496', 'Resource Hijacking'],
+  wget_dropper: ['T1105', 'Ingress Tool Transfer'],
+  shell_dropper: ['T1059.004', 'Command and Scripting Interpreter: Unix Shell'],
+  recon: ['T1082', 'System Information Discovery'],
+  persistence: ['T1098.004', 'Account Manipulation: SSH Authorized Keys'],
+  privesc: ['T1548', 'Abuse Elevation Control Mechanism'],
+  cleanup: ['T1070.003', 'Indicator Removal: Clear Command History'],
 }
-export const toolingLabel = (t) => TOOLING_TA[t] ? `${t} · ${TOOLING_TA[t].split('-')[0]}` : t
+export const toolingTitle = (t) => TOOLING_MITRE[t] ? `${TOOLING_MITRE[t][0]} ${TOOLING_MITRE[t][1]}` : undefined
 
 function uniqueVals(rows, fn) {
   return [...new Set(rows.map(fn).filter((v) => v != null && v !== '' && v !== '—'))].sort()
@@ -283,7 +287,7 @@ export function Behavior({ onPick }) {
             <td>
               <div className="tags">
                 {(r.tooling_hints || []).length
-                  ? (r.tooling_hints || []).map((t) => <span key={t} className="tag tooling" title={TOOLING_TA[t]}>{toolingLabel(t)}</span>)
+                  ? (r.tooling_hints || []).map((t) => <span key={t} className="tag tooling" title={toolingTitle(t)}>{t}</span>)
                   : <span className="muted">—</span>}
               </div>
             </td>
