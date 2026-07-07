@@ -29,6 +29,19 @@ CREATE INDEX idx_events_src_ip   ON events (src_ip, ts DESC);
 CREATE INDEX idx_events_service  ON events (service, ts DESC);
 CREATE INDEX idx_events_type     ON events (event_type, ts DESC);
 
+-- Columnar compression for aged chunks. events is append-only and the bulk of
+-- its size is the raw JSONB payload, which compresses ~10x. Segment by src_ip so
+-- the per-IP event lookup (/api/ips/{ip}) can skip other segments in a compressed
+-- chunk; order by ts DESC to match every time-ranged read. Chunks older than
+-- 30 days are compressed by the background policy (recent chunks stay
+-- uncompressed for fast inserts/queries).
+ALTER TABLE events SET (
+    timescaledb.compress,
+    timescaledb.compress_segmentby = 'src_ip',
+    timescaledb.compress_orderby   = 'ts DESC, event_id'
+);
+SELECT add_compression_policy('events', INTERVAL '30 days');
+
 -- one row per observed source IP (the "attackers" list the UI shows)
 CREATE TABLE ips (
     src_ip        INET PRIMARY KEY,
@@ -71,6 +84,9 @@ CREATE TABLE scan_events (
 );
 CREATE INDEX idx_scan_src ON scan_events (src_ip, ts DESC);
 CREATE INDEX idx_scan_ts  ON scan_events (ts DESC);
+-- Append-heavy: default autoanalyze (~20% growth) rarely fires on a large table,
+-- leaving the planner with stale row estimates. Re-analyze after ~2% change.
+ALTER TABLE scan_events SET (autovacuum_analyze_scale_factor = 0.02);
 
 -- correlated attack events
 CREATE TABLE attack_events (
@@ -85,6 +101,12 @@ CREATE TABLE attack_events (
 );
 CREATE INDEX idx_attack_src ON attack_events (src_ip, ts DESC);
 CREATE INDEX idx_attack_ts  ON attack_events (ts DESC);
+-- Append-heavy and the largest non-hypertable: keep planner stats fresh so joins
+-- on it don't get bad row estimates. Re-analyze after ~2% change, vacuum at ~5%.
+ALTER TABLE attack_events SET (
+    autovacuum_analyze_scale_factor = 0.02,
+    autovacuum_vacuum_scale_factor  = 0.05
+);
 
 -- per-IP behavioral profile (one row, upserted)
 CREATE TABLE behavior_profiles (

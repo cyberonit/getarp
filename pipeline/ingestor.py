@@ -234,6 +234,15 @@ async def consumer(queue: asyncio.Queue, pool, r):
                          approximate=True)
 
 
+# Cap the distinct-value arrays on the hot ips row. Past this many distinct
+# ports/services an IP is already unambiguously a scanner; further growth adds no
+# analytic value but turns every event from that IP into an O(n) membership scan
+# plus a full-row (eventually TOASTed) rewrite. A hyperactive scanner reached 798
+# ports before this cap existed.
+PORTS_HIT_CAP = 128
+SERVICES_HIT_CAP = 32
+
+
 async def _upsert_ip(con, e) -> bool:
     # dst_port may be NULL (most cowrie events don't carry it) — record no port
     # rather than a fabricated one
@@ -244,12 +253,17 @@ async def _upsert_ip(con, e) -> bool:
            ON CONFLICT (src_ip) DO UPDATE SET
              last_seen = now(),
              event_count = ips.event_count + 1,
-             services_hit = CASE WHEN $2 = ANY(ips.services_hit) THEN ips.services_hit
-                                  ELSE ips.services_hit || $2::text END,
-             ports_hit = CASE WHEN $3::int IS NULL OR $3 = ANY(ips.ports_hit) THEN ips.ports_hit
-                              ELSE ips.ports_hit || $3::int END
+             services_hit = CASE
+                 WHEN $2 = ANY(ips.services_hit)
+                   OR cardinality(ips.services_hit) >= $4 THEN ips.services_hit
+                 ELSE ips.services_hit || $2::text END,
+             ports_hit = CASE
+                 WHEN $3::int IS NULL OR $3 = ANY(ips.ports_hit)
+                   OR cardinality(ips.ports_hit) >= $5 THEN ips.ports_hit
+                 ELSE ips.ports_hit || $3::int END
            RETURNING (xmax = 0) AS inserted""",
         e["src_ip"], e["service"] or "tcp", e["dst_port"],
+        SERVICES_HIT_CAP, PORTS_HIT_CAP,
     )
     return bool(row and row["inserted"])
 
