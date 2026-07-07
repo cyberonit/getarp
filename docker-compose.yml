@@ -23,6 +23,11 @@ networks:
     driver: bridge          # outbound internet for CTI lookups and CrowdSec CAPI sync
   frontend_net:
     driver: bridge
+    ipam:
+      config:
+        # Pinned so the API can trust XFF only from this proxy network (Caddy).
+        # Keep in sync with TRUSTED_PROXIES on the api service.
+        - subnet: 172.19.0.0/16
   ops_net:
     driver: bridge
     internal: true          # api <-> docker-proxy only; keeps the socket proxy off data_net
@@ -309,6 +314,9 @@ services:
       CROWDSEC_LAPI_URL: http://crowdsec:8080
       CROWDSEC_BOUNCER_KEY: ${CROWDSEC_BOUNCER_KEY}
       DOCKER_HOST: tcp://docker-proxy:2375
+      # Honor X-Forwarded-For only from Caddy on frontend_net (see api/ratelimit.py).
+      # Must match the frontend_net subnet pinned under networks:.
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.19.0.0/16}
     volumes:
       - ./docs:/app/docs:ro
       - honeypot_logs:/data/logs:ro
