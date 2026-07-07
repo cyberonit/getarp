@@ -73,19 +73,21 @@ def _db_creds():
 
 
 async def refresh_loop(pool, r):
-    """Hourly: re-queue enrichment for IPs still active in the last 24h whose
-    intel is stale, or which never got a verdict (unknown reputation)."""
+    """Hourly: re-queue enrichment for IPs with no enrichment row at all (missed
+    while the worker was down or misconfigured), plus IPs still active in the
+    last 24h whose intel is stale or which never got a verdict."""
     while True:
         try:
             async with pool.acquire() as con:
                 rows = await con.fetch(
-                    f"""SELECT host(e.src_ip) AS ip FROM ip_enrichment e
-                        JOIN ips i ON i.src_ip = e.src_ip
-                        WHERE i.last_seen > now() - interval '24 hours'
-                          AND (e.updated_at < now() - interval '{REFRESH_STALE}'
-                               OR (e.reputation = 'unknown'
-                                   AND e.updated_at < now() - interval '{REFRESH_RETRY}'))
-                        ORDER BY e.updated_at ASC LIMIT $1""", REFRESH_BATCH)
+                    f"""SELECT host(i.src_ip) AS ip
+                        FROM ips i LEFT JOIN ip_enrichment e ON e.src_ip = i.src_ip
+                        WHERE e.src_ip IS NULL
+                           OR (i.last_seen > now() - interval '24 hours'
+                               AND (e.updated_at < now() - interval '{REFRESH_STALE}'
+                                    OR (e.reputation = 'unknown'
+                                        AND e.updated_at < now() - interval '{REFRESH_RETRY}')))
+                        ORDER BY e.updated_at ASC NULLS FIRST LIMIT $1""", REFRESH_BATCH)
             for row in rows:
                 await r.xadd(ENRICH_STREAM, {"src_ip": row["ip"], "force": "1"},
                              maxlen=50000, approximate=True)
