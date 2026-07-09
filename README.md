@@ -75,30 +75,60 @@ Enroll in the CrowdSec community console to share signals and pull the community
 make enroll T=<console-token>     # token from https://app.crowdsec.net
 ```
 
+## Two-tier enrichment
+
+Free per-request threat-intel tiers are tiny (VirusTotal 500/day, AbuseIPDB
+1 000/day, CrowdSec CTI 40/month) and collapse under honeypot volume, so the
+default `tiered` provider splits enrichment in two:
+
+- **Tier 1 — local feeds** (`enrichment/feeds.py`), unlimited and free. Bulk
+  downloads on a schedule (`FEED_REFRESH_HOURS`, default 3 h), cached in the
+  `feed_indicators` table so restarts serve the last copy, matched in memory:
+  - `feodo` — Abuse.ch Feodo Tracker C2 blocklist (CC0, no key)
+  - `threatfox` — Abuse.ch ThreatFox ip:port IOCs, last 7 days (CC0; needs the
+    free `ABUSECH_KEY`)
+  - `crowdsec-lapi` — every decision from the CrowdSec engine **in this stack**,
+    including its ~25 k-IP CAPI community blocklist (local call, no quota)
+  - `geolite` — MaxMind GeoLite2 country/ASN from `.mmdb` files in the `geoip`
+    volume; auto-downloaded when `MAXMIND_LICENSE_KEY` is set (free account),
+    or drop the files in manually
+- **Tier 2 — per-request APIs**, spent only on IPs that earn it. `greynoise`
+  runs when Tier 1 flags an IP or it crosses `TIER2_MIN_EVENTS` /
+  `TIER2_MIN_THREAT_SCORE`; `abuseipdb` additionally requires
+  `TIER2_HIGH_THREAT_SCORE`; `virustotal` is **off by default** (its free-API
+  ToS forbids commercial use) — set `VT_ENABLE=true` to opt in. Results are
+  cached in Postgres for `ENRICHMENT_CACHE_TTL_DAYS` (default 14), so restarts
+  never re-spend quota.
+
+Each IP's `ip_enrichment.raw` records which tiers ran and why (`raw->'tiered'`).
+
 ## Swapping the intelligence provider
 
 The enrichment provider is set during `setup.sh` based on which API key you supply.
 To change it at runtime via the admin Settings tab, or by editing `.env`:
 
 ```bash
-ENRICHMENT_PROVIDER=multi          # recommended: queries all providers in parallel
-VIRUSTOTAL_KEY=<your-key>
+ENRICHMENT_PROVIDER=tiered         # recommended: local feeds + gated APIs (see above)
 docker compose up -d enrichment    # recreate to pick up .env changes
 ```
 
 | Provider | API key required | Notes |
 |---|---|---|
-| `crowdsec` | Optional (CTI key) | Default; falls back to local LAPI decisions without key |
+| `tiered` | Optional | **Default.** Tier-1 local feeds always; Tier-2 APIs gated by thresholds |
+| `crowdsec` | Optional (CTI key) | Falls back to local LAPI decisions without key |
 | `abuseipdb` | Yes | Free tier: 1 000 checks/day |
 | `greynoise` | Optional | Community API works without key, limited results |
-| `virustotal` | Yes | Free tier: 500 lookups/day |
+| `virustotal` | Yes | Free tier: 500 lookups/day; ToS forbids commercial per-request use |
 | `abusech` | No | Abuse.ch Feodo Tracker botnet C2 blocklist; no key needed |
-| `multi` | — | Queries **all** providers in parallel and merges results (recommended) |
+| `multi` | — | Queries **all** providers in parallel, ignoring quotas — lab use only |
 
-**Multi-provider merge logic:** most severe reputation wins (malicious > suspicious > unknown > clean), highest confidence wins, `is_known_attacker` is true if any provider flags the IP, geo/ASN uses the first non-null value, categories are the union of all providers. Each provider's raw response is stored separately for forensics.
+**Merge logic** (`tiered` and `multi`): most severe reputation wins (malicious > suspicious > unknown > clean), highest confidence wins, `is_known_attacker` is true if any provider flags the IP, geo/ASN uses the first non-null value, categories are the union of all providers. Each provider's raw response is stored separately for forensics.
 
-Add a custom provider by subclassing `EnrichmentProvider` in `enrichment/providers.py`
-and decorating it with `@register` — nothing else changes.
+**Adding a source:** for a bulk feed, subclass `FeedProvider` in
+`enrichment/feeds.py`, implement `refresh()` / `load()` / `lookup()`, and decorate
+with `@register_feed` — the worker schedules it and `tiered` consumes it
+automatically. For a per-request API, subclass `EnrichmentProvider` in
+`enrichment/providers.py` and decorate with `@register` — nothing else changes.
 
 ## Reports
 

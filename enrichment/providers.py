@@ -436,6 +436,44 @@ class AbusechProvider(EnrichmentProvider):
 _REP_SEVERITY = {"malicious": 3, "suspicious": 2, "unknown": 1, "clean": 0}
 
 
+def merge_enrichments(ip: str, provider_name: str,
+                      named_results: list[tuple[str, Enrichment | Exception]]) -> Enrichment:
+    """Merge per-provider results: worst-of reputation, max confidence, union of
+    categories, first non-null country/asn/org. Per-provider raw kept for audit."""
+    merged = Enrichment(src_ip=ip, provider=provider_name)
+    merged.raw = {}
+
+    for name, result in named_results:
+        if isinstance(result, Exception):
+            merged.raw[name] = {"error": str(result)}
+            continue
+        praw = dict(result.raw) if isinstance(result.raw, dict) else {}
+        praw["reputation"] = result.reputation
+        merged.raw[name] = praw
+
+        if _REP_SEVERITY.get(result.reputation, 0) > _REP_SEVERITY.get(merged.reputation, 0):
+            merged.reputation = result.reputation
+
+        if result.confidence > merged.confidence:
+            merged.confidence = result.confidence
+
+        if result.is_known_attacker:
+            merged.is_known_attacker = True
+
+        if not merged.country and result.country:
+            merged.country = result.country
+        if not merged.asn and result.asn:
+            merged.asn = result.asn
+        if not merged.org and result.org:
+            merged.org = result.org
+
+        for cat in result.categories:
+            if cat and cat not in merged.categories:
+                merged.categories.append(cat)
+
+    return merged
+
+
 @register
 class MultiProvider(EnrichmentProvider):
     """Queries all other registered providers in parallel and merges results.
@@ -445,42 +483,109 @@ class MultiProvider(EnrichmentProvider):
     def __init__(self, settings: dict):
         super().__init__(settings)
         self._providers = [cls(settings) for name, cls in _REGISTRY.items()
-                           if name != self.name]
+                           if name not in (self.name, "tiered")]
 
     async def enrich(self, ip: str) -> Enrichment:
         providers = self._providers
         results = await asyncio.gather(
             *[p.enrich(ip) for p in providers], return_exceptions=True)
+        return merge_enrichments(ip, self.name,
+                                 [(p.name, r) for p, r in zip(providers, results)])
 
-        merged = Enrichment(src_ip=ip, provider=self.name)
-        merged.raw = {}
 
-        for p, result in zip(providers, results):
-            if isinstance(result, Exception):
-                merged.raw[p.name] = {"error": str(result)}
+@register
+class TieredProvider(EnrichmentProvider):
+    """Two-tier enrichment (the default mode, ENRICHMENT_PROVIDER=tiered).
+
+    Tier 1 — local feeds (feeds.py): abuse.ch blocklists, the local CrowdSec
+    engine's decisions (incl. the free CAPI community blocklist), and GeoLite2
+    geo/ASN. Unlimited, matched in memory, always run.
+
+    Tier 2 — per-request APIs, spent only on IPs that earn it. A Tier-1 hit is
+    a verdict, not a trigger: feed-listed IPs spend no Tier-2 quota.
+      * greynoise: runs when activity crosses TIER2_MIN_EVENTS /
+        TIER2_MIN_THREAT_SCORE (scanner-vs-targeted signal).
+      * abuseipdb: runs when threat_score >= TIER2_HIGH_THREAT_SCORE AND
+        greynoise came back inconclusive — if GreyNoise already classified the
+        IP, a second opinion isn't worth the quota.
+      * virustotal: same bar, and OFF unless VT_ENABLE=true — VirusTotal's ToS
+        forbids commercial use of the free per-request API; bring your own
+        licensed key before enabling.
+
+    The worker calls bind(pool) after construction; the pool feeds the activity
+    gate (ips.event_count / threat_score) and Tier-1 persistence. Unbound, the
+    gate reads 0/0 and Tier 2 never runs."""
+    name = "tiered"
+
+    def __init__(self, settings: dict):
+        super().__init__(settings)
+        from feeds import get_feed_providers
+        self.feed_providers = get_feed_providers(settings)
+        tier2 = ["greynoise", "abuseipdb"]
+        if str(settings.get("VT_ENABLE", "")).lower() in ("1", "true", "yes"):
+            tier2.append("virustotal")
+        self._tier2 = [_REGISTRY[n](settings) for n in tier2]
+        self._min_events = int(settings.get("TIER2_MIN_EVENTS", 10))
+        self._min_score = float(settings.get("TIER2_MIN_THREAT_SCORE", 30))
+        self._high_score = float(settings.get("TIER2_HIGH_THREAT_SCORE", 60))
+        self._pool = None
+
+    def bind(self, pool):
+        self._pool = pool
+
+    async def _activity(self, ip: str) -> tuple[int, float]:
+        if not self._pool:
+            return 0, 0.0
+        try:
+            async with self._pool.acquire() as con:
+                row = await con.fetchrow(
+                    "SELECT event_count, threat_score FROM ips WHERE src_ip=$1", ip)
+            if row:
+                return row["event_count"] or 0, row["threat_score"] or 0.0
+        except Exception as ex:
+            print(f"[tiered] activity lookup failed for {ip}: {ex}", flush=True)
+        return 0, 0.0
+
+    async def enrich(self, ip: str) -> Enrichment:
+        named: list[tuple[str, Enrichment | Exception]] = []
+        flagged = False
+        for fp in self.feed_providers:
+            try:
+                hit = fp.lookup(ip)
+            except Exception as ex:
+                named.append((fp.name, ex))
                 continue
-            praw = dict(result.raw) if isinstance(result.raw, dict) else {}
-            praw["reputation"] = result.reputation
-            merged.raw[p.name] = praw
+            if hit:
+                named.append((fp.name, hit))
+                if _REP_SEVERITY.get(hit.reputation, 0) >= 2:
+                    flagged = True
 
-            if _REP_SEVERITY.get(result.reputation, 0) > _REP_SEVERITY.get(merged.reputation, 0):
-                merged.reputation = result.reputation
+        events, score = await self._activity(ip)
+        active = events >= self._min_events or score >= self._min_score
+        high = score >= self._high_score
 
-            if result.confidence > merged.confidence:
-                merged.confidence = result.confidence
+        ran: list[str] = []
+        if active:
+            gn = next(p for p in self._tier2 if p.name == "greynoise")
+            try:
+                gn_res: Enrichment | Exception = await gn.enrich(ip)
+            except Exception as ex:
+                gn_res = ex
+            named.append((gn.name, gn_res))
+            ran.append(gn.name)
+            inconclusive = (isinstance(gn_res, Exception)
+                            or gn_res.reputation == "unknown")
+            if high and inconclusive:
+                paid = [p for p in self._tier2 if p.name != "greynoise"]
+                results = await asyncio.gather(
+                    *[p.enrich(ip) for p in paid], return_exceptions=True)
+                named.extend((p.name, r) for p, r in zip(paid, results))
+                ran.extend(p.name for p in paid)
 
-            if result.is_known_attacker:
-                merged.is_known_attacker = True
-
-            if not merged.country and result.country:
-                merged.country = result.country
-            if not merged.asn and result.asn:
-                merged.asn = result.asn
-            if not merged.org and result.org:
-                merged.org = result.org
-
-            for cat in result.categories:
-                if cat and cat not in merged.categories:
-                    merged.categories.append(cat)
-
+        merged = merge_enrichments(ip, self.name, named)
+        merged.raw["tiered"] = {
+            "event_count": events, "threat_score": score, "tier1_flagged": flagged,
+            "tier2_ran": ran,
+            "tier2_reason": "active" if active else "below-threshold",
+        }
         return merged

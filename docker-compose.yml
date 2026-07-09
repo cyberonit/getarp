@@ -38,6 +38,7 @@ volumes:
   crowdsec_data:
   crowdsec_config:
   caddy_data:
+  geoip_data:               # GeoLite2 databases for the enrichment geolite feed
 
 services:
   # Restricted Docker socket proxy — read-only container/image inspection plus
@@ -240,7 +241,7 @@ services:
       SVC_DB_USER: svc_enrichment
       SVC_DB_PASSWORD: ${SVC_ENRICHMENT_PASSWORD:-}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      ENRICHMENT_PROVIDER: ${ENRICHMENT_PROVIDER}
+      ENRICHMENT_PROVIDER: ${ENRICHMENT_PROVIDER:-tiered}
       CROWDSEC_LAPI_URL: http://crowdsec:8080
       CROWDSEC_BOUNCER_KEY: ${CROWDSEC_BOUNCER_KEY}
       CROWDSEC_CTI_KEY: ${CROWDSEC_CTI_KEY:-}
@@ -248,6 +249,15 @@ services:
       ABUSECH_KEY: ${ABUSECH_KEY:-}
       GREYNOISE_KEY: ${GREYNOISE_KEY:-}
       VIRUSTOTAL_KEY: ${VIRUSTOTAL_KEY:-}
+      VT_ENABLE: ${VT_ENABLE:-false}
+      MAXMIND_LICENSE_KEY: ${MAXMIND_LICENSE_KEY:-}
+      FEED_REFRESH_HOURS: ${FEED_REFRESH_HOURS:-3}
+      ENRICHMENT_CACHE_TTL_DAYS: ${ENRICHMENT_CACHE_TTL_DAYS:-14}
+      TIER2_MIN_EVENTS: ${TIER2_MIN_EVENTS:-10}
+      TIER2_MIN_THREAT_SCORE: ${TIER2_MIN_THREAT_SCORE:-30}
+      TIER2_HIGH_THREAT_SCORE: ${TIER2_HIGH_THREAT_SCORE:-60}
+    volumes:
+      - geoip_data:/geoip                 # GeoLite2 .mmdb files (see enrichment/feeds.py)
     depends_on:
       postgres:
         condition: service_healthy

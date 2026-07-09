@@ -71,6 +71,19 @@ CREATE TABLE ip_enrichment (
     raw         JSONB
 );
 
+-- Tier-1 threat-intel feeds, bulk-downloaded on a schedule by the enrichment
+-- worker (enrichment/feeds.py) and matched locally — no per-IP API quota spent.
+CREATE TABLE feed_indicators (
+    source     TEXT        NOT NULL,      -- feodo|threatfox|crowdsec-lapi
+    indicator  INET        NOT NULL,
+    type       TEXT        NOT NULL DEFAULT 'ip',
+    category   TEXT,
+    meta       JSONB,
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (source, indicator)
+);
+CREATE INDEX idx_feed_indicators_indicator ON feed_indicators (indicator);
+
 -- correlated scan events
 CREATE TABLE scan_events (
     id          BIGSERIAL PRIMARY KEY,
@@ -165,7 +178,7 @@ CREATE TABLE settings (
     updated_at TIMESTAMPTZ DEFAULT now()
 );
 INSERT INTO settings(key, value) VALUES
-  ('enrichment_provider', '"crowdsec"'),
+  ('enrichment_provider', '"tiered"'),
   ('scan_port_threshold', '5'),
   ('bruteforce_threshold', '5'),
   ('status_interval_seconds', '300')
@@ -236,6 +249,7 @@ BEGIN
         END IF;
         GRANT USAGE ON SCHEMA public TO svc_enrichment;
         GRANT SELECT, INSERT, UPDATE ON ip_enrichment TO svc_enrichment;
+        GRANT SELECT, INSERT, UPDATE, DELETE ON feed_indicators TO svc_enrichment;
         GRANT SELECT, UPDATE ON ips TO svc_enrichment;
         GRANT SELECT ON settings TO svc_enrichment;
         GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO svc_enrichment;
@@ -254,7 +268,7 @@ BEGIN
         GRANT SELECT, INSERT ON status_snapshots TO svc_analytics;
         GRANT SELECT, INSERT, UPDATE, DELETE ON behavior_profiles TO svc_analytics;
         GRANT SELECT, UPDATE, DELETE ON ips TO svc_analytics;
-        GRANT SELECT ON ip_enrichment TO svc_analytics;
+        GRANT SELECT ON ip_enrichment, feed_indicators TO svc_analytics;
         GRANT SELECT ON settings TO svc_analytics;
         GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO svc_analytics;
     END IF;
@@ -266,8 +280,8 @@ BEGIN
             EXECUTE format('CREATE ROLE svc_api LOGIN PASSWORD %L', pw);
         END IF;
         GRANT USAGE ON SCHEMA public TO svc_api;
-        GRANT SELECT ON events, ips, ip_enrichment, scan_events, attack_events,
-                        behavior_profiles, status_snapshots TO svc_api;
+        GRANT SELECT ON events, ips, ip_enrichment, feed_indicators, scan_events,
+                        attack_events, behavior_profiles, status_snapshots TO svc_api;
         GRANT SELECT, INSERT, UPDATE ON users, settings, reports, revoked_tokens TO svc_api;
         GRANT DELETE ON revoked_tokens TO svc_api;
         GRANT INSERT, SELECT ON audit_log TO svc_api;

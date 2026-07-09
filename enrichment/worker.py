@@ -18,15 +18,22 @@ from base import get_provider
 ENRICH_STREAM = "enrich:queue"
 GROUP = "enrichers"
 CONSUMER = os.environ.get("HOSTNAME", "enricher-1")
-CACHE_TTL = 3600  # don't re-enrich the same IP within an hour
+
+# Durable cache: a fresh ip_enrichment row short-circuits re-enrichment, so
+# restarts never re-spend Tier-2 quota (the old 1h Redis marker didn't survive
+# them). force=1 (refresh loop) bypasses it.
+CACHE_TTL_DAYS = int(os.environ.get("ENRICHMENT_CACHE_TTL_DAYS", "14"))
 
 # Re-enrichment: the pipeline only queues an IP the first time it is seen, so
 # without this loop ip_enrichment rows would stay frozen forever — including
 # rows written while API keys were missing or a provider was down.
 REFRESH_INTERVAL_S = 3600
 REFRESH_BATCH = 200        # cap per hour to respect provider quotas (VT: 500/day)
-REFRESH_STALE = "7 days"   # normal refresh age for still-active IPs
+REFRESH_STALE = f"{CACHE_TTL_DAYS} days"  # normal refresh age for still-active IPs
 REFRESH_RETRY = "6 hours"  # retry age for rows that never got a verdict
+
+# Tier-1 feed refresh cadence (see feeds.py)
+FEED_REFRESH_S = int(float(os.environ.get("FEED_REFRESH_HOURS", "3")) * 3600)
 
 
 async def ensure_group(r):
@@ -99,6 +106,34 @@ async def refresh_loop(pool, r):
         await asyncio.sleep(REFRESH_INTERVAL_S)
 
 
+async def is_fresh(pool, ip: str) -> bool:
+    """True when the durable Postgres cache still covers this IP."""
+    async with pool.acquire() as con:
+        return bool(await con.fetchval(
+            "SELECT updated_at > now() - make_interval(days => $2) "
+            "FROM ip_enrichment WHERE src_ip=$1", ip, CACHE_TTL_DAYS))
+
+
+async def feed_refresh_loop(pool, provider):
+    """Load cached Tier-1 feeds at startup, then refresh each on an interval.
+    Each feed fails independently — refresh() logs and keeps its last copy."""
+    feeds = getattr(provider, "feed_providers", [])
+    if not feeds:
+        return
+    for f in feeds:
+        try:
+            await f.load(pool)
+        except Exception as ex:
+            print(f"[feeds] {f.name} load failed: {ex}", flush=True)
+    while True:
+        for f in feeds:
+            try:
+                await f.refresh(pool)
+            except Exception as ex:
+                print(f"[feeds] {f.name} refresh failed: {ex}", flush=True)
+        await asyncio.sleep(FEED_REFRESH_S)
+
+
 async def consume(pool, r, provider):
     while True:
         resp = await r.xreadgroup(GROUP, CONSUMER, {ENRICH_STREAM: ">"},
@@ -112,7 +147,7 @@ async def consume(pool, r, provider):
                 try:
                     if ip:
                         ipaddress.ip_address(ip)
-                    if ip and (force or not await r.get(f"enr:seen:{ip}")):
+                    if ip and (force or not await is_fresh(pool, ip)):
                         enr = await provider.enrich(ip)
                         await upsert(pool, enr)
                         # feed threat hint back to the IP record
@@ -121,7 +156,6 @@ async def consume(pool, r, provider):
                                 await con.execute(
                                     "UPDATE ips SET threat_score = GREATEST(threat_score, $2) "
                                     "WHERE src_ip=$1", ip, 60.0)
-                        await r.set(f"enr:seen:{ip}", "1", ex=CACHE_TTL)
                 except Exception as ex:
                     safe_ip = str(ip).replace("\n", "").replace("\r", "")
                     safe_err = str(ex).replace("\n", " ").replace("\r", "")
@@ -147,9 +181,12 @@ async def main():
     provider_name = (settings.get("enrichment_provider", "").strip('"')
                      or os.environ.get("ENRICHMENT_PROVIDER", "crowdsec"))
     provider = get_provider(provider_name, settings)
+    if hasattr(provider, "bind"):
+        provider.bind(pool)
     print(f"[enrichment] provider = {provider.name}", flush=True)
 
-    await asyncio.gather(consume(pool, r, provider), refresh_loop(pool, r))
+    await asyncio.gather(consume(pool, r, provider), refresh_loop(pool, r),
+                         feed_refresh_loop(pool, provider))
 
 
 if __name__ == "__main__":
