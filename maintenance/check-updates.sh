@@ -112,10 +112,14 @@ if $APPLY; then
         echo "  (Suricata container not running — skipped)"
     else
         echo "Updating Suricata ET Open rules..."
+        # refresh the rule-source index first; non-fatal, the cached index works
+        docker compose exec -T suricata suricata-update update-sources \
+            || warn "could not refresh rule-source index — continuing with cached copy"
         # -o writes the merged ruleset where suricata.yaml actually reads it
         # (/etc/suricata/rules, bind-mounted); the suricata-update default of
         # /var/lib/suricata/rules is unmounted and never loaded.
-        if docker compose exec -T suricata suricata-update -o /etc/suricata/rules; then
+        # --no-reload: the unix-command socket is disabled, we restart instead.
+        if docker compose exec -T suricata suricata-update -o /etc/suricata/rules --no-reload; then
             docker compose restart suricata
             ok "Suricata rules updated and service restarted"
         else

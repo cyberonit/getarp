@@ -370,7 +370,8 @@ bash /usr/local/bin/getarp-register-bouncer \
     || warn "Bouncer registration failed — run 'make bouncer' once stack is healthy."
 
 info "Pulling Suricata ET Open rules..."
-docker compose exec -T suricata suricata-update -o /etc/suricata/rules >/dev/null 2>&1 \
+docker compose exec -T suricata suricata-update update-sources >/dev/null 2>&1 || true
+docker compose exec -T suricata suricata-update -o /etc/suricata/rules --no-reload >/dev/null 2>&1 \
     && docker compose restart suricata \
     && ok "Suricata rules updated." \
     || warn "suricata-update failed — run 'make rules' manually."
