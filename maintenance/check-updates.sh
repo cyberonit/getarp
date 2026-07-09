@@ -1,9 +1,22 @@
 #!/usr/bin/env bash
-# Run from the project root: bash maintenance/check-updates.sh [--apply]
+# Run from the project root: bash maintenance/check-updates.sh [check|apply|commit]
+#
+# Stages:
+#   check   (default) dry-run — report outdated deps, change nothing
+#   apply   update requirements pins + npm packages, pull latest base images
+#   commit  rebuild images (make build), refresh Suricata rules (make rules),
+#           then commit + push the dependency changes from the apply stage
 set -euo pipefail
 
+STAGE="${1:-check}"
+case "$STAGE" in
+    check|--check)   STAGE=check ;;
+    apply|--apply)   STAGE=apply ;;
+    commit|--commit) STAGE=commit ;;
+    *) echo "usage: $0 [check|apply|commit]" >&2; exit 1 ;;
+esac
 APPLY=false
-[[ "${1:-}" == "--apply" ]] && APPLY=true
+[[ "$STAGE" == "apply" ]] && APPLY=true
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -17,6 +30,64 @@ ok()   { echo -e "${GREEN}[OK]${NC}    $*"; }
 warn() { echo -e "${YELLOW}[OUT]${NC}   $*"; }
 info() { echo -e "        $*"; }
 hdr()  { echo -e "\n==> $*"; }
+
+update_suricata_rules() {
+    hdr "Suricata IDS rules (make rules)"
+    if ! docker compose ps --status running suricata 2>/dev/null | grep -q suricata; then
+        echo "  (Suricata container not running — skipped)"
+        return 0
+    fi
+    echo "Updating Suricata ET Open rules..."
+    # refresh the rule-source index first; non-fatal, the cached index works
+    docker compose exec -T suricata suricata-update update-sources \
+        || warn "could not refresh rule-source index — continuing with cached copy"
+    # -o writes the merged ruleset where suricata.yaml actually reads it
+    # (/etc/suricata/rules, bind-mounted); the suricata-update default of
+    # /var/lib/suricata/rules is unmounted and never loaded.
+    # --no-reload: the unix-command socket is disabled, we restart instead.
+    if docker compose exec -T suricata suricata-update -o /etc/suricata/rules --no-reload; then
+        docker compose restart suricata
+        ok "Suricata rules updated and service restarted"
+    else
+        warn "suricata-update failed — see errors above; rules NOT updated"
+    fi
+}
+
+# ── Stage: commit ─────────────────────────────────────────────────────────────
+# Rebuild with the updated deps, refresh IDS rules, then commit + push. Only
+# the files the apply stage edits are committed, so unrelated work in the
+# tree never gets swept into a maintenance commit.
+if [[ "$STAGE" == "commit" ]]; then
+    hdr "Rebuild images (make build)"
+    make build
+    ok "Images rebuilt — recreate containers with 'make up' to deploy them"
+
+    update_suricata_rules
+
+    hdr "Commit dependency updates"
+    DEP_FILES=(api/requirements.txt pipeline/requirements.txt
+               frontend/package.json frontend/package-lock.json)
+    CHANGED=()
+    for f in "${DEP_FILES[@]}"; do
+        if [[ -f "$f" ]] && ! git diff --quiet -- "$f"; then
+            CHANGED+=("$f")
+        fi
+    done
+    if [[ ${#CHANGED[@]} -eq 0 ]]; then
+        ok "No dependency changes to commit"
+    else
+        git add -- "${CHANGED[@]}"
+        git commit -m "Maintenance: dependency updates $(date +%Y-%m-%d)"
+        git push
+        ok "Committed and pushed: ${CHANGED[*]}"
+    fi
+
+    echo
+    echo "────────────────────────────────────────"
+    echo "Done. Recreate containers to deploy the rebuilt images: make up"
+    echo "────────────────────────────────────────"
+    exit 0
+fi
 
 # ── 1. Python packages ────────────────────────────────────────────────────────
 hdr "Python packages"
@@ -63,11 +134,10 @@ else
                 fi
             done < "$req" > "${req}.tmp" && mv "${req}.tmp" "$req"
         done
-        ok "requirements files updated — run 'make build' to rebuild containers"
+        ok "requirements files updated"
     else
         echo
-        echo "  Run with --apply to update version pins in requirements files."
-        echo "  Then run: make build"
+        echo "  Run the apply stage to update the version pins."
     fi
 fi
 
@@ -86,11 +156,10 @@ else
         echo
         echo "Applying npm updates..."
         docker compose run --rm --no-deps frontend npm update
-        ok "npm packages updated — run 'make build' to rebuild the frontend image"
+        ok "npm packages updated"
     else
         echo
-        echo "  Run with --apply to run 'npm update' inside the frontend container."
-        echo "  Then run: make build"
+        echo "  Run the apply stage to run 'npm update' inside the frontend container."
     fi
 fi
 
@@ -99,44 +168,20 @@ hdr "Docker base images"
 if $APPLY; then
     echo "Pulling latest base images..."
     docker compose pull
-    ok "Base images updated — run 'make build' to rebuild with new bases"
+    ok "Base images updated"
 else
-    echo "  Run with --apply to pull latest Docker base images."
-    echo "  Then run: make build"
-fi
-
-# ── 4. Suricata rules ─────────────────────────────────────────────────────────
-hdr "Suricata IDS rules"
-if $APPLY; then
-    if ! docker compose ps --status running suricata 2>/dev/null | grep -q suricata; then
-        echo "  (Suricata container not running — skipped)"
-    else
-        echo "Updating Suricata ET Open rules..."
-        # refresh the rule-source index first; non-fatal, the cached index works
-        docker compose exec -T suricata suricata-update update-sources \
-            || warn "could not refresh rule-source index — continuing with cached copy"
-        # -o writes the merged ruleset where suricata.yaml actually reads it
-        # (/etc/suricata/rules, bind-mounted); the suricata-update default of
-        # /var/lib/suricata/rules is unmounted and never loaded.
-        # --no-reload: the unix-command socket is disabled, we restart instead.
-        if docker compose exec -T suricata suricata-update -o /etc/suricata/rules --no-reload; then
-            docker compose restart suricata
-            ok "Suricata rules updated and service restarted"
-        else
-            warn "suricata-update failed — see errors above; rules NOT updated"
-        fi
-    fi
-else
-    echo "  Run with --apply to pull latest Suricata ET Open rules."
-    echo "  Or run: make rules"
+    echo "  Run the apply stage to pull the latest Docker base images."
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo
 echo "────────────────────────────────────────"
 if $APPLY; then
-    echo "Done. If packages were updated, run: make build"
+    echo "Apply stage done. Next: bash maintenance/check-updates.sh commit"
+    echo "  (rebuilds images, refreshes Suricata rules, commits + pushes pins)"
 else
-    echo "Dry-run complete. Re-run with --apply to apply all updates."
+    echo "Check stage complete. Next stages:"
+    echo "  bash maintenance/check-updates.sh apply    # update pins/npm, pull bases"
+    echo "  bash maintenance/check-updates.sh commit   # make build, make rules, git commit+push"
 fi
 echo "────────────────────────────────────────"
