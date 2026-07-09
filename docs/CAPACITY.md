@@ -1,6 +1,6 @@
 # Disk capacity plan — 3-year data retention
 
-Sizing for a single-VM deployment (4 vCPU / 8 GB RAM) retaining **3 years** of
+Sizing for a single-VM deployment (min 2 vCPU / 4 GB, recommended 4 vCPU / 8 GB) retaining **3 years** of
 threat data in PostgreSQL/TimescaleDB. Postgres is the system of record; raw
 sensor logs are rotated and only kept 14 days for forensics.
 
@@ -41,9 +41,10 @@ re-planning.
 | OS + packages + journal | ~10 GB | |
 | **Working set** | **~50 GB** | |
 
-**Recommendation: 100 GB disk** (2× headroom over the working set).
-Absolute minimum 60 GB. If sustained rate ever reaches ~100K events/day,
-re-plan at 150–200 GB.
+**Requirement: 100 GB disk** (2× headroom over the working set) — this is the
+stated minimum in the HLD. The hard engineering floor is ~60 GB, but that
+leaves no margin and demands disciplined image/build-cache pruning. If
+sustained rate ever reaches ~100K events/day, re-plan at 150–200 GB.
 
 ## What enforces the retention
 

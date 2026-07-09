@@ -2,7 +2,7 @@
 
 **Author:** Security Architecture (15y) + 2 senior engineers
 **Status:** PoC / v0.4
-**Target:** Single VM, 4 vCPU / 8 GB RAM / 100 GB disk, domain `getarp.net`
+**Target:** Single VM, domain `getarp.net` — minimum 2 vCPU / 4 GB RAM / 100 GB disk, recommended 4 vCPU / 8 GB RAM / 100 GB disk
 
 ---
 
@@ -37,7 +37,7 @@ network path from a popped honeypot into your intelligence database.
                  └───────────────┬────────────────┘
                                  │
    ┌─────────────────────────────┼──────────────────────────────────────┐
-   │  VM (4 vCPU / 8 GB)          │                                       │
+   │  VM (min 2 vCPU / 4 GB)      │                                       │
    │                             │                                       │
    │  ┌─────────── honeypot_net (ISOLATED, no egress to data) ────────┐  │
    │  │  Cowrie (SSH 22)               Extra-Services emulator        │  │
@@ -180,20 +180,28 @@ module that wants the full command transcript).
   or lift the whole `data_net` tier to a second VM and point the pipeline's Redis at it.
   Postgres → managed PG; Cowrie → multiple sensors writing to the same bus.
 
-## 8. Capacity plan (4 vCPU / 8 GB / 100 GB, 3-year retention)
+## 8. Capacity plan (min 2 vCPU / 4 GB, recommended 4 vCPU / 8 GB, 100 GB disk, 3-year retention)
 
 Sized from **measured production rates** (23 days of live traffic, June–July 2026);
 the full disk model and its assumptions live in [`docs/CAPACITY.md`](CAPACITY.md).
 
+**Minimum 2 vCPU / 4 GB / 100 GB** runs the stack: steady state fits easily and
+the floor is set by peaks — Suricata's 1.5-CPU cap and 52K-signature reloads,
+plus the monthly maintenance rebuild (`npm ci`/vite wants 1–2 GB). At the
+minimum, add 2 GB swap and expect slow builds.
+**Recommended 4 vCPU / 8 GB / 100 GB** carries a large burst margin (worst
+observed day: 171K events, ~50× steady state) and keeps room for postgres and
+page cache.
+
 ### CPU / RAM budget
 
 Compose limits are caps, not reservations; measured steady-state for the whole
-stack is **~2.5 GB RAM and <10% of one core**, so 4 vCPU / 8 GB carries a large
-burst margin (worst observed day: 171K events, ~50× steady state).
+stack is **~1.7 GB RAM and <10% of one core** (re-measured 2026-07-09 with the
+full ET Open ruleset loaded).
 
 | Service | CPU limit | RAM limit | Measured (steady state) |
 |---|---|---|---|
-| Suricata | 1.5 | 2 GB | ~50 MB (`detect.profile: low`, 2 AF_PACKET threads) |
+| Suricata | 1.5 | 2 GB | ~490 MB with 52K ET Open rules (`detect.profile: low`, 2 AF_PACKET threads) |
 | Cowrie + Extra | 1.0 | 1 GB | ~180 MB |
 | CrowdSec (LAPI) | 0.5 | 1 GB | ~220 MB |
 | Postgres/TimescaleDB | 2 | 4 GB | ~1.2 GB |
