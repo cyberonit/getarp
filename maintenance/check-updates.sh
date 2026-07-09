@@ -4,9 +4,9 @@
 # Stages:
 #   check   (default) dry-run — report outdated deps, change nothing
 #   apply   update requirements pins + npm packages, pull latest base images
-#   commit  rebuild images (make build), deploy them (make up), refresh
-#           Suricata rules (make rules), then commit + push the dependency
-#           changes from the apply stage
+#   commit  rebuild + deploy images (make up), refresh Suricata rules
+#           (make rules), then commit + push the dependency changes from
+#           the apply stage
 set -euo pipefail
 
 STAGE="${1:-check}"
@@ -59,13 +59,9 @@ update_suricata_rules() {
 # the files the apply stage edits are committed, so unrelated work in the
 # tree never gets swept into a maintenance commit.
 if [[ "$STAGE" == "commit" ]]; then
-    hdr "Rebuild images (make build)"
-    make build
-    ok "Images rebuilt"
-
-    hdr "Deploy rebuilt images (make up)"
+    hdr "Rebuild and deploy images (make up)"
     make up
-    ok "Containers recreated on the rebuilt images"
+    ok "Images rebuilt and containers recreated on them"
 
     update_suricata_rules
 
@@ -187,6 +183,6 @@ if $APPLY; then
 else
     echo "Check stage complete. Next stages:"
     echo "  bash maintenance/check-updates.sh apply    # update pins/npm, pull bases"
-    echo "  bash maintenance/check-updates.sh commit   # make build, make up, make rules, git commit+push"
+    echo "  bash maintenance/check-updates.sh commit   # make up, make rules, git commit+push"
 fi
 echo "────────────────────────────────────────"
