@@ -9,7 +9,7 @@ Checks all project dependencies for outdated versions and applies updates in thr
 ```bash
 bash maintenance/check-updates.sh check    # (default) dry-run — report only, no changes
 bash maintenance/check-updates.sh apply    # update requirements pins + npm packages, pull base images
-bash maintenance/check-updates.sh commit   # make build, make rules, then git commit + push the pins
+bash maintenance/check-updates.sh commit   # make build, make up, make rules, then git commit + push the pins
 ```
 
 (`--apply` is still accepted as an alias for the apply stage.)
@@ -23,6 +23,7 @@ bash maintenance/check-updates.sh commit   # make build, make rules, then git co
 | apply | update npm packages | `npm` (via Docker) | `frontend/package.json` |
 | apply | pull latest base images | `docker compose pull` | local image cache |
 | commit | rebuild images | `make build` | local images |
+| commit | deploy rebuilt images | `make up` | running containers |
 | commit | refresh + reload Suricata ET Open rules | `make rules` equivalent | `ids/suricata/rules/suricata.rules` |
 | commit | commit + push dependency changes | `git` | only the files the apply stage edits |
 
@@ -31,8 +32,7 @@ bash maintenance/check-updates.sh commit   # make build, make rules, then git co
 1. `check` — review what's outdated.
 2. Check any flagged `requirements.txt` pins before upgrading — some are pinned for compatibility reasons (e.g. `bcrypt==4.0.1` due to passlib 1.7.4 incompatibility with newer versions).
 3. `apply` — update the pins and npm packages, pull new base images.
-4. `commit` — rebuild the images, refresh the Suricata rules, and commit + push the dependency bumps (only `requirements.txt` / `package.json` files; unrelated working-tree changes are left alone).
-5. Recreate containers to deploy the rebuilt images: `make up`
+4. `commit` — rebuild the images, deploy them (`make up`), refresh the Suricata rules, and commit + push the dependency bumps (only `requirements.txt` / `package.json` files; unrelated working-tree changes are left alone).
 
 > Suricata rules can also be updated independently with `make rules`.
 
@@ -56,6 +56,5 @@ To apply updates after reviewing:
 
 ```bash
 bash maintenance/check-updates.sh apply
-bash maintenance/check-updates.sh commit
-make up   # recreate containers on the rebuilt images
+bash maintenance/check-updates.sh commit   # also rebuilds, deploys, refreshes rules
 ```

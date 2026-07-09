@@ -4,8 +4,9 @@
 # Stages:
 #   check   (default) dry-run — report outdated deps, change nothing
 #   apply   update requirements pins + npm packages, pull latest base images
-#   commit  rebuild images (make build), refresh Suricata rules (make rules),
-#           then commit + push the dependency changes from the apply stage
+#   commit  rebuild images (make build), deploy them (make up), refresh
+#           Suricata rules (make rules), then commit + push the dependency
+#           changes from the apply stage
 set -euo pipefail
 
 STAGE="${1:-check}"
@@ -60,7 +61,11 @@ update_suricata_rules() {
 if [[ "$STAGE" == "commit" ]]; then
     hdr "Rebuild images (make build)"
     make build
-    ok "Images rebuilt — recreate containers with 'make up' to deploy them"
+    ok "Images rebuilt"
+
+    hdr "Deploy rebuilt images (make up)"
+    make up
+    ok "Containers recreated on the rebuilt images"
 
     update_suricata_rules
 
@@ -84,7 +89,7 @@ if [[ "$STAGE" == "commit" ]]; then
 
     echo
     echo "────────────────────────────────────────"
-    echo "Done. Recreate containers to deploy the rebuilt images: make up"
+    echo "Done. Images rebuilt and deployed, Suricata rules refreshed."
     echo "────────────────────────────────────────"
     exit 0
 fi
@@ -178,10 +183,10 @@ echo
 echo "────────────────────────────────────────"
 if $APPLY; then
     echo "Apply stage done. Next: bash maintenance/check-updates.sh commit"
-    echo "  (rebuilds images, refreshes Suricata rules, commits + pushes pins)"
+    echo "  (rebuilds + deploys images, refreshes Suricata rules, commits + pushes pins)"
 else
     echo "Check stage complete. Next stages:"
     echo "  bash maintenance/check-updates.sh apply    # update pins/npm, pull bases"
-    echo "  bash maintenance/check-updates.sh commit   # make build, make rules, git commit+push"
+    echo "  bash maintenance/check-updates.sh commit   # make build, make up, make rules, git commit+push"
 fi
 echo "────────────────────────────────────────"
