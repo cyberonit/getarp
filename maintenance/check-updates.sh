@@ -108,11 +108,20 @@ fi
 # ── 4. Suricata rules ─────────────────────────────────────────────────────────
 hdr "Suricata IDS rules"
 if $APPLY; then
-    echo "Updating Suricata ET Open rules..."
-    docker compose exec suricata suricata-update 2>/dev/null && \
-        docker compose restart suricata && \
-        ok "Suricata rules updated and service restarted" || \
+    if ! docker compose ps --status running suricata 2>/dev/null | grep -q suricata; then
         echo "  (Suricata container not running — skipped)"
+    else
+        echo "Updating Suricata ET Open rules..."
+        # -o writes the merged ruleset where suricata.yaml actually reads it
+        # (/etc/suricata/rules, bind-mounted); the suricata-update default of
+        # /var/lib/suricata/rules is unmounted and never loaded.
+        if docker compose exec -T suricata suricata-update -o /etc/suricata/rules; then
+            docker compose restart suricata
+            ok "Suricata rules updated and service restarted"
+        else
+            warn "suricata-update failed — see errors above; rules NOT updated"
+        fi
+    fi
 else
     echo "  Run with --apply to pull latest Suricata ET Open rules."
     echo "  Or run: make rules"

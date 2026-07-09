@@ -83,7 +83,12 @@ app-layer:
     tls:    {enabled: yes}
     dns:    {enabled: yes}
     ftp:    {enabled: yes}
-    dnp3:   {enabled: yes}
+    # dnp3 needs detection-ports or its parser never registers and every
+    # ET dnp3 rule fails "protocol dnp3 is disabled" during suricata -T
+    dnp3:
+      enabled: yes
+      detection-ports:
+        dp: 20000
     modbus: {enabled: yes}
 
 logging:

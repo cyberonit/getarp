@@ -44,7 +44,7 @@ restart:
 	docker compose restart
 
 rules:
-	docker compose exec suricata suricata-update
+	docker compose exec suricata suricata-update -o /etc/suricata/rules
 	docker compose restart suricata
 	@echo "[✓] Suricata rules updated."
 
