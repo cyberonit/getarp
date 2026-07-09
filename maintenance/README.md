@@ -37,13 +37,13 @@ bash maintenance/check-updates.sh commit   # make up, make rules, then git commi
 
 ## Scheduled runs
 
-A crontab entry runs the dry-run automatically on the **1st of every month at 08:00**:
+A crontab entry runs the **full cycle** (check → apply → commit) on the **1st of every month at 07:00** (installed by `deploy/setup.sh`, an hour before the monthly report):
 
 ```
-0 8 1 * * bash /home/getarp-intel/maintenance/check-updates.sh >> /home/getarp-intel/maintenance/logs/updates-$(date +%Y-%m).log 2>&1
+0 7 1 * * { bash /home/getarp-intel/maintenance/check-updates.sh check && bash /home/getarp-intel/maintenance/check-updates.sh apply && bash /home/getarp-intel/maintenance/check-updates.sh commit; } >> /home/getarp-intel/maintenance/logs/updates-$(date +\%Y-\%m).log 2>&1
 ```
 
-Logs are written to `maintenance/logs/updates-YYYY-MM.log` (one file per month, excluded from git).
+The stages are chained with `&&`, so a failed apply never deploys or pushes a half-applied update. Logs are written to `maintenance/logs/updates-YYYY-MM.log` (one file per month, excluded from git).
 
 To review the latest log:
 
@@ -51,9 +51,14 @@ To review the latest log:
 cat maintenance/logs/updates-$(date +%Y-%m).log
 ```
 
-To apply updates after reviewing:
+### Reverting a bad update
+
+The commit stage pushes each month's dependency bumps as a single
+`Maintenance: dependency updates YYYY-MM-DD` commit, so if an update breaks
+the app, roll back with:
 
 ```bash
-bash maintenance/check-updates.sh apply
-bash maintenance/check-updates.sh commit   # also rebuilds, deploys, refreshes rules
+git log --oneline -5                       # find the maintenance commit
+git revert <maintenance-commit> && git push
+bash maintenance/check-updates.sh commit   # rebuild + deploy on the reverted pins
 ```
