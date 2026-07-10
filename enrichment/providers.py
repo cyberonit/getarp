@@ -106,20 +106,89 @@ class CrowdSecProvider(EnrichmentProvider):
 
 @register
 class AbuseIPDBProvider(EnrichmentProvider):
+    """AbuseIPDB check API with a hard daily budget (free tier: 1000/day).
+
+    Same guard rails as VirusTotalProvider: once ABUSEIPDB_DAILY_QUOTA requests
+    have been spent (default leaves headroom under the free cap) further lookups
+    return a quota_exhausted stub instead of a request the API would 429 anyway;
+    the worker's 6h unknown-retry loop picks those IPs up after the reset."""
     name = "abuseipdb"
     URL = "https://api.abuseipdb.com/api/v2/check"
 
+    _MAX_CACHE = 10000
+    _DEFAULT_DAILY_QUOTA = 900
+
+    def __init__(self, settings: dict):
+        super().__init__(settings)
+        self._cache: dict[str, Enrichment] = {}
+        self._cache_ts: dict[str, float] = {}
+        self._cache_ttl = 86400
+        self._daily_quota = int(settings.get("ABUSEIPDB_DAILY_QUOTA",
+                                             self._DEFAULT_DAILY_QUOTA))
+        self._daily_count = 0
+        self._daily_reset: float = 0.0
+        self._rate_limited_until: float = 0.0
+
+    def _cache_put(self, ip: str, e: Enrichment):
+        if len(self._cache) >= self._MAX_CACHE:
+            oldest = min(self._cache_ts, key=self._cache_ts.get)
+            del self._cache[oldest], self._cache_ts[oldest]
+        self._cache[ip] = e
+        self._cache_ts[ip] = time.time()
+
+    def _reset_daily_if_needed(self):
+        now = time.time()
+        if now >= self._daily_reset:
+            self._daily_count = 0
+            midnight = now - (now % 86400) + 86400
+            self._daily_reset = midnight
+
     async def enrich(self, ip: str) -> Enrichment:
+        now = time.time()
+
+        cached = self._cache.get(ip)
+        if cached and now - self._cache_ts.get(ip, 0) < self._cache_ttl:
+            return cached
+
         e = Enrichment(src_ip=ip, provider=self.name)
         key = self.settings.get("ABUSEIPDB_KEY")
         if not key:
             e.categories = ["api-key-missing"]
             return e
+
+        self._reset_daily_if_needed()
+        if self._daily_count >= self._daily_quota:
+            e.reputation = "unknown"
+            e.raw = {"quota_exhausted": True,
+                     "daily_count": self._daily_count,
+                     "resets_at": int(self._daily_reset)}
+            return e
+
+        if now < self._rate_limited_until:
+            e.reputation = "unknown"
+            e.raw = {"rate_limited": True,
+                     "retry_after": int(self._rate_limited_until - now)}
+            return e
+
         try:
             async with httpx.AsyncClient(timeout=8) as c:
                 resp = await c.get(self.URL,
                                    headers={"Key": key, "Accept": "application/json"},
                                    params={"ipAddress": ip, "maxAgeInDays": 90})
+            self._daily_count += 1
+            if self._daily_count == self._daily_quota:
+                print(f"[abuseipdb] daily budget ({self._daily_quota}) spent, "
+                      f"deferring lookups until reset", flush=True)
+
+            if resp.status_code == 429:
+                retry = int(resp.headers.get("Retry-After", 0)) or 3600
+                self._rate_limited_until = time.time() + retry
+                print(f"[abuseipdb] rate limited, backing off {retry}s",
+                      flush=True)
+                e.reputation = "unknown"
+                e.raw = {"rate_limited": True, "retry_after": retry}
+                return e
+
             resp.raise_for_status()
             d = resp.json().get("data", {})
             e.raw = d
@@ -132,16 +201,22 @@ class AbuseIPDBProvider(EnrichmentProvider):
                             "suspicious" if score >= 25 else "clean")
         except Exception as ex:
             e.raw = {"error": str(ex)}
+        self._cache_put(ip, e)
         return e
 
 
 @register
 class GreyNoiseProvider(EnrichmentProvider):
     """GreyNoise community API with rate-limit awareness.  Backs off on 429 and
-    serves cached results for the remainder of the cooldown window."""
+    serves cached results for the remainder of the cooldown window.
+
+    The community tier is a small WEEKLY search allowance and its 429 carries no
+    Retry-After header, so the default cooldown is hours, not seconds — retrying
+    every minute burns nothing but log lines for days once the week's quota is
+    gone (GREYNOISE_429_COOLDOWN tunes it)."""
     name = "greynoise"
     URL = "https://api.greynoise.io/v3/community/"
-    _COOLDOWN = 60
+    _DEFAULT_429_COOLDOWN = 21600  # 6 h
 
     _MAX_CACHE = 10000
 
@@ -150,6 +225,8 @@ class GreyNoiseProvider(EnrichmentProvider):
         self._cache: dict[str, Enrichment] = {}
         self._cache_ts: dict[str, float] = {}
         self._cache_ttl = 3600
+        self._cooldown = int(settings.get("GREYNOISE_429_COOLDOWN",
+                                          self._DEFAULT_429_COOLDOWN))
         self._rate_limited_until: float = 0.0
 
     def _cache_put(self, ip: str, e: Enrichment):
@@ -179,8 +256,10 @@ class GreyNoiseProvider(EnrichmentProvider):
             async with httpx.AsyncClient(timeout=8) as c:
                 resp = await c.get(self.URL + ip, headers=headers)
             if resp.status_code == 429:
-                retry = int(resp.headers.get("Retry-After", self._COOLDOWN))
+                retry = int(resp.headers.get("Retry-After", 0)) or self._cooldown
                 self._rate_limited_until = now + retry
+                print(f"[greynoise] rate limited, backing off {retry}s",
+                      flush=True)
                 e.reputation = "unknown"
                 e.raw = {"rate_limited": True, "retry_after": retry}
                 return e
@@ -507,7 +586,11 @@ class TieredProvider(EnrichmentProvider):
         TIER2_MIN_THREAT_SCORE (scanner-vs-targeted signal).
       * abuseipdb: runs when threat_score >= TIER2_HIGH_THREAT_SCORE AND
         greynoise came back inconclusive — if GreyNoise already classified the
-        IP, a second opinion isn't worth the quota.
+        IP, a second opinion isn't worth the quota. A rate-limited GreyNoise
+        (its community tier is ~a handful of searches per week) also counts as
+        inconclusive, so AbuseIPDB effectively becomes the primary Tier-2 source
+        while GreyNoise is throttled — safe because AbuseIPDB enforces its own
+        ABUSEIPDB_DAILY_QUOTA budget internally and stubs out beyond it.
       * virustotal: same bar, and OFF unless VT_ENABLE=true — VirusTotal's ToS
         forbids commercial use of the free per-request API; bring your own
         licensed key before enabling.
@@ -564,7 +647,18 @@ class TieredProvider(EnrichmentProvider):
         active = events >= self._min_events or score >= self._min_score
         high = score >= self._high_score
 
+        def _deferred(res) -> bool:
+            """Stub answer: the provider spent no quota because it is rate
+            limited or over its daily budget. The merged row stays 'unknown'
+            (unless Tier 1 said otherwise) so the worker's retry loop
+            re-queues the IP once the provider can answer again."""
+            return (not isinstance(res, Exception)
+                    and isinstance(res.raw, dict)
+                    and bool(res.raw.get("rate_limited")
+                             or res.raw.get("quota_exhausted")))
+
         ran: list[str] = []
+        deferred: list[str] = []
         if active:
             gn = next(p for p in self._tier2 if p.name == "greynoise")
             try:
@@ -572,7 +666,7 @@ class TieredProvider(EnrichmentProvider):
             except Exception as ex:
                 gn_res = ex
             named.append((gn.name, gn_res))
-            ran.append(gn.name)
+            (deferred if _deferred(gn_res) else ran).append(gn.name)
             inconclusive = (isinstance(gn_res, Exception)
                             or gn_res.reputation == "unknown")
             if high and inconclusive:
@@ -580,12 +674,13 @@ class TieredProvider(EnrichmentProvider):
                 results = await asyncio.gather(
                     *[p.enrich(ip) for p in paid], return_exceptions=True)
                 named.extend((p.name, r) for p, r in zip(paid, results))
-                ran.extend(p.name for p in paid)
+                for p, r in zip(paid, results):
+                    (deferred if _deferred(r) else ran).append(p.name)
 
         merged = merge_enrichments(ip, self.name, named)
         merged.raw["tiered"] = {
             "event_count": events, "threat_score": score, "tier1_flagged": flagged,
-            "tier2_ran": ran,
+            "tier2_ran": ran, "tier2_deferred": deferred,
             "tier2_reason": "active" if active else "below-threshold",
         }
         return merged

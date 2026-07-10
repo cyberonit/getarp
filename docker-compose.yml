@@ -256,6 +256,8 @@ services:
       TIER2_MIN_EVENTS: ${TIER2_MIN_EVENTS:-10}
       TIER2_MIN_THREAT_SCORE: ${TIER2_MIN_THREAT_SCORE:-30}
       TIER2_HIGH_THREAT_SCORE: ${TIER2_HIGH_THREAT_SCORE:-60}
+      ABUSEIPDB_DAILY_QUOTA: ${ABUSEIPDB_DAILY_QUOTA:-900}
+      GREYNOISE_429_COOLDOWN: ${GREYNOISE_429_COOLDOWN:-21600}
     volumes:
       - geoip_data:/geoip                 # GeoLite2 .mmdb files (see enrichment/feeds.py)
     depends_on:
