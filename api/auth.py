@@ -5,27 +5,36 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import bcrypt
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 import jwt
 from jwt.exceptions import InvalidTokenError
-from passlib.context import CryptContext
 
 import db
 
-pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2 = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 SECRET = os.environ["JWT_SECRET"]
 ALGO = "HS256"
 EXPIRE = int(os.environ.get("JWT_EXPIRE_MINUTES", 60))
 
 
+def _pw_bytes(p: str) -> bytes:
+    # bcrypt only reads the first 72 bytes; truncate explicitly because
+    # bcrypt>=5.0 raises on longer input (passlib truncated silently, so
+    # existing hashes were made from truncated secrets).
+    return p.encode("utf-8")[:72]
+
+
 def hash_pw(p: str) -> str:
-    return pwd.hash(p)
+    return bcrypt.hashpw(_pw_bytes(p), bcrypt.gensalt()).decode("ascii")
 
 
 def verify_pw(p: str, h: str) -> bool:
-    return pwd.verify(p, h)
+    try:
+        return bcrypt.checkpw(_pw_bytes(p), h.encode("ascii"))
+    except ValueError:  # malformed stored hash
+        return False
 
 
 def make_token(sub: str, role: str) -> tuple[str, str]:
