@@ -37,7 +37,7 @@ bash maintenance/check-updates.sh commit   # make up, make rules, then git commi
 
 ## Scheduled runs
 
-A crontab entry runs the **full cycle** (check → apply → commit) on the **1st of every month at 07:00** (installed by `deploy/setup.sh`, an hour before the monthly report):
+A crontab entry runs the **full cycle** (check → apply → commit) on the **1st of every month at 07:00** (installed by `deploy/setup.sh`):
 
 ```
 0 7 1 * * { bash /home/getarp-intel/maintenance/check-updates.sh check && bash /home/getarp-intel/maintenance/check-updates.sh apply && bash /home/getarp-intel/maintenance/check-updates.sh commit; } >> /home/getarp-intel/maintenance/logs/updates-$(date +\%Y-\%m).log 2>&1
