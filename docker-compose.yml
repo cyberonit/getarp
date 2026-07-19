@@ -371,7 +371,11 @@ services:
       ADMIN_IP: ${ADMIN_IP}
     ports:
       - "443:443"
-      - "8443:80"           # port 80 is taken by the honeypot; ACME via TLS-ALPN on 443
+      # Caddy's :80 exists only for local/ACME fallback; ACME itself uses
+      # TLS-ALPN on 443. Bound to loopback so it is not internet-exposed —
+      # Docker's DNAT bypasses UFW, so a 0.0.0.0 publish would be reachable
+      # regardless of the firewall allowlist.
+      - "127.0.0.1:8443:80"
     volumes:
       - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
