@@ -333,8 +333,11 @@ ok "Daily log rotation installed (/etc/cron.daily/getarp-logs)."
 # The commit stage pushes the dependency bumps to the remote, so if an
 # update breaks the app the bad pins can be reverted with git.
 UPDATES_CRON="0 7 1 * * { bash $REPO_DIR/maintenance/check-updates.sh check && bash $REPO_DIR/maintenance/check-updates.sh apply && bash $REPO_DIR/maintenance/check-updates.sh commit; } >> $REPO_DIR/maintenance/logs/updates-\$(date +\\%Y-\\%m).log 2>&1"
-( crontab -l 2>/dev/null | grep -v "check-updates.sh"; echo "$UPDATES_CRON" ) | crontab -
+# ET Open publishes daily; a monthly refresh alone leaves the ruleset stale.
+RULES_CRON="30 6 * * 1 bash $REPO_DIR/maintenance/check-updates.sh rules >> $REPO_DIR/maintenance/logs/rules-\$(date +\\%Y-\\%m).log 2>&1"
+( crontab -l 2>/dev/null | grep -v "check-updates.sh"; echo "$UPDATES_CRON"; echo "$RULES_CRON" ) | crontab -
 ok "Monthly dependency-update cron installed (1st of month, 07:00)."
+ok "Weekly Suricata rules cron installed (Mondays, 06:30)."
 
 # ═══════════════════════════════════════════════════════════════════════════
 # STEP 7  Stub rules file + CrowdSec whitelist + start the stack

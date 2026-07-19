@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run from the project root: bash maintenance/check-updates.sh [check|apply|commit]
+# Run from the project root: bash maintenance/check-updates.sh [check|apply|commit|rules]
 #
 # Stages:
 #   check   (default) dry-run — report outdated deps, change nothing
@@ -7,6 +7,8 @@
 #   commit  rebuild + deploy images (make up), refresh Suricata rules
 #           (make rules), then commit + push the dependency changes from
 #           the apply stage
+#   rules   refresh Suricata rules only — ET Open publishes daily, so the
+#           weekly cron runs this between monthly full-maintenance passes
 set -euo pipefail
 
 STAGE="${1:-check}"
@@ -14,7 +16,8 @@ case "$STAGE" in
     check|--check)   STAGE=check ;;
     apply|--apply)   STAGE=apply ;;
     commit|--commit) STAGE=commit ;;
-    *) echo "usage: $0 [check|apply|commit]" >&2; exit 1 ;;
+    rules|--rules)   STAGE=rules ;;
+    *) echo "usage: $0 [check|apply|commit|rules]" >&2; exit 1 ;;
 esac
 APPLY=false
 [[ "$STAGE" == "apply" ]] && APPLY=true
@@ -53,6 +56,12 @@ update_suricata_rules() {
         warn "suricata-update failed — see errors above; rules NOT updated"
     fi
 }
+
+# ── Stage: rules ──────────────────────────────────────────────────────────────
+if [[ "$STAGE" == "rules" ]]; then
+    update_suricata_rules
+    exit 0
+fi
 
 # ── Stage: commit ─────────────────────────────────────────────────────────────
 # Rebuild with the updated deps, refresh IDS rules, then commit + push. Only
