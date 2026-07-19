@@ -76,7 +76,7 @@ echo ""
 info "--- SSH management ---"
 warn "sshd will be moved off port 22 so Cowrie can bind it."
 warn "Pick a port, open it in your cloud firewall NOW, then press Enter."
-ask MGMT_PORT "Management SSH port"
+ask MGMT_PORT "Management SSH port (pick a non-standard high port)"
 # validate it's actually a number
 [[ "$MGMT_PORT" =~ ^[0-9]+$ ]] || die "MGMT_PORT must be a number, got: $MGMT_PORT"
 [[ "$MGMT_PORT" -gt 1024 && "$MGMT_PORT" -lt 65535 ]] || die "MGMT_PORT must be 1025-65534"
@@ -341,6 +341,18 @@ ok "Monthly dependency-update cron installed (1st of month, 07:00)."
 # ═══════════════════════════════════════════════════════════════════════════
 mkdir -p "$REPO_DIR/ids/suricata/rules"
 touch "$REPO_DIR/ids/suricata/rules/suricata.rules"
+
+# ids/suricata/suricata.yaml is gitignored (it contains the sensor's public IP
+# as HOME_NET) but docker-compose bind-mounts it — generate it from the tracked
+# example; never overwrite an existing (possibly hand-tuned) file.
+SURICATA_YAML="$REPO_DIR/ids/suricata/suricata.yaml"
+if [[ ! -f "$SURICATA_YAML" ]]; then
+    sed "s/__SENSOR_PUBLIC_IP__/$SENSOR_PUBLIC_IP/" \
+        "$REPO_DIR/ids/suricata/suricata.yaml.example" > "$SURICATA_YAML"
+    ok "Suricata config written with HOME_NET $SENSOR_PUBLIC_IP."
+else
+    ok "Suricata config already present — left untouched."
+fi
 
 # crowdsec/whitelists.yaml is gitignored (it contains the operator's IP) but
 # docker-compose bind-mounts it — if it's missing, Docker would create a

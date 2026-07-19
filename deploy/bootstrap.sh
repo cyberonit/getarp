@@ -8,7 +8,7 @@ echo "[*] getarp bootstrap starting"
 # The honeypot binds host:22. Your real admin SSH MUST move to a mgmt port
 # bound to a management interface, BEFORE you start the stack, or you lock
 # yourself out / collide with Cowrie.
-MGMT_PORT="${MGMT_PORT:?set MGMT_PORT}"
+MGMT_PORT="${MGMT_PORT:?set MGMT_PORT to your management SSH port before running}"
 if grep -qE '^#?Port 22' /etc/ssh/sshd_config; then
   sed -i "s/^#\?Port .*/Port ${MGMT_PORT}/" /etc/ssh/sshd_config
   echo "[*] sshd moved to port ${MGMT_PORT} — reconnect there after reboot:"
