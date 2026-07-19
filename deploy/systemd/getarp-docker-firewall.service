@@ -1,0 +1,17 @@
+[Unit]
+Description=getarp.net DOCKER-USER default-deny (UFW-aware Docker port filtering)
+# Docker recreates its chains when the daemon (re)starts, wiping our jump.
+# Order after docker and bind our lifecycle to it so the rules are re-applied
+# on every docker start/restart as well as at boot.
+After=docker.service
+Requires=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/getarp-intel/deploy/docker-firewall.sh apply
+ExecStop=/home/getarp-intel/deploy/docker-firewall.sh down
+
+[Install]
+WantedBy=multi-user.target

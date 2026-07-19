@@ -52,5 +52,18 @@ echo "    docker compose exec suricata suricata-update && docker compose restart
 # ── 6. build + launch ──
 docker compose pull || true
 docker compose up -d --build
+
+# ── 6b. Docker-aware firewall: UFW alone does NOT filter Docker-published
+# ports (Docker's DNAT bypasses the INPUT chain). Install a DOCKER-USER
+# default-deny that only permits the sensor's intended public ports. ──
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+UNIT=/etc/systemd/system/getarp-docker-firewall.service
+sed "s#/home/getarp-intel#${REPO_DIR}#g" \
+    "$REPO_DIR/deploy/systemd/getarp-docker-firewall.service" > "$UNIT"
+chmod +x "$REPO_DIR/deploy/docker-firewall.sh"
+systemctl daemon-reload
+systemctl enable --now getarp-docker-firewall.service
+echo "[*] DOCKER-USER default-deny installed (getarp-docker-firewall.service)"
+
 echo "[*] stack up. dashboard -> https://getarp.net  (admin: see .env)"
 echo "[*] register CrowdSec console (optional): docker compose exec crowdsec cscli console enroll <token>"
