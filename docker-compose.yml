@@ -213,6 +213,7 @@ services:
       PG_PASSWORD: ${PG_PASSWORD}
       SVC_DB_USER: svc_pipeline
       SVC_DB_PASSWORD: ${SVC_PIPELINE_PASSWORD:-}
+      SENSOR_PUBLIC_IP: ${SENSOR_PUBLIC_IP:-}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
     volumes:
       - honeypot_logs:/data/logs:ro      # READ-ONLY: one-way telemetry crossing the boundary

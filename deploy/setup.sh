@@ -68,6 +68,8 @@ info "--- Network ---"
 IFACE_DEFAULT=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $5; exit}')
 IFACE_DEFAULT="${IFACE_DEFAULT:-eth0}"
 ask PUBLIC_IFACE "Public network interface" "$IFACE_DEFAULT"
+SELF_IP_DEFAULT=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="src"){print $(i+1); exit}}')
+ask SENSOR_PUBLIC_IP "Public IP of this sensor (own replies are filtered from ingestion)" "$SELF_IP_DEFAULT"
 ask DOMAIN       "Domain name"              "getarp.net"
 
 echo ""
@@ -147,6 +149,7 @@ echo "# getarp.net generated $(date -u +"%Y-%m-%dT%H:%M:%SZ") — DO NOT COMMIT"
 echo ""
 echo "DOMAIN=$DOMAIN"
 echo "PUBLIC_IFACE=$PUBLIC_IFACE"
+echo "SENSOR_PUBLIC_IP=$SENSOR_PUBLIC_IP"
 echo "ADMIN_IP=$ADMIN_IP"
 echo ""
 echo "PG_DB=$PG_DB"

@@ -22,6 +22,13 @@ import asyncpg
 import redis.asyncio as redis
 
 LOG_DIR = os.environ.get("LOG_DIR", "/data/logs")
+# This sensor's own public IP(s), comma-separated. Suricata response-direction
+# rules ("ET SCAN ... attempt response" etc.) fire on the honeypot's own replies
+# with src_ip = this host and dst_port = the attacker's ephemeral port, which
+# downstream scan correlation misreads as the sensor port-scanning itself.
+SELF_IPS = frozenset(
+    ip.strip()
+    for ip in os.environ.get("SENSOR_PUBLIC_IP", "").split(",") if ip.strip())
 FILES = {
     "cowrie.json": "cowrie",
     "eve.json": "suricata",
@@ -205,6 +212,8 @@ async def consumer(queue: asyncio.Queue, pool, r):
         try:
             ipaddress.ip_address(e["src_ip"])
         except (ValueError, TypeError):
+            continue
+        if e["src_ip"] in SELF_IPS:
             continue
         ts = _parse_ts(e["ts"])
         stored_password = _redact_password(e["password"])
