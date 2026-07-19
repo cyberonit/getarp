@@ -1,0 +1,14 @@
+[Unit]
+Description=getarp.net disable NIC offloads on the capture interface (Suricata full-payload capture)
+# Offload settings reset on reboot (and can reset on driver reload), so
+# re-apply them once the network device is up, before traffic ramps up.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/getarp-intel/deploy/nic-offloads.sh
+
+[Install]
+WantedBy=multi-user.target

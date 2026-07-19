@@ -53,6 +53,18 @@ echo "    docker compose exec suricata suricata-update && docker compose restart
 docker compose pull || true
 docker compose up -d --build
 
+# ── 6a. NIC offloads: GRO (incl. virtio rx-gro-hw) hands Suricata merged
+# super-packets bigger than its MTU-sized snaplen, truncating payloads and
+# silently breaking rule content matching. Disable them, persistently. ──
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+UNIT=/etc/systemd/system/getarp-nic-offloads.service
+sed "s#/home/getarp-intel#${REPO_DIR}#g" \
+    "$REPO_DIR/deploy/systemd/getarp-nic-offloads.service" > "$UNIT"
+chmod +x "$REPO_DIR/deploy/nic-offloads.sh"
+systemctl daemon-reload
+systemctl enable --now getarp-nic-offloads.service
+echo "[*] NIC offloads disabled on capture iface (getarp-nic-offloads.service)"
+
 # ── 6b. Docker-aware firewall: UFW alone does NOT filter Docker-published
 # ports (Docker's DNAT bypasses the INPUT chain). Install a DOCKER-USER
 # default-deny that only permits the sensor's intended public ports. ──
