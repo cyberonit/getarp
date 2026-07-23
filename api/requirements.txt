@@ -1,6 +1,6 @@
-fastapi==0.139.0
+fastapi==0.139.2
 uvicorn==0.51.0
-websockets==16.0          # required for /api/ws/status; bare uvicorn 404s upgrade requests
+websockets==16.1.1          # required for /api/ws/status; bare uvicorn 404s upgrade requests
 asyncpg==0.31.0
 redis==8.0.1
 PyJWT==2.13.0
@@ -8,4 +8,4 @@ bcrypt==5.0.0
 python-multipart==0.0.32
 httpx==0.28.1
 slowapi==0.1.10
-docker==7.1.0
+docker==7.2.0
