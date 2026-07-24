@@ -89,7 +89,7 @@ shared log volume.
 | Bus/Cache | Redis | `redis:7` | Event stream + pub/sub for live status |
 | Storage | PostgreSQL + TimescaleDB | `timescale/timescaledb` | Events, sessions, IPs, enrichment, correlations, reports, users |
 | Ingest | Pipeline | Python | Tails sensor logs → normalize → Redis stream + Postgres |
-| Intel | Enrichment — MultiProvider | Python | Queries all 5 providers in parallel; merges by worst reputation; stores each provider's raw response |
+| Intel | Enrichment — Tiered (default) | Python | Tier-1 local feeds always run free; Tier-2 (GreyNoise → AbuseIPDB) escalates only past an activity threshold, quota-gated so honeypot volume can't overspend a paid API |
 | Analytics | Analytics | Python | Pluggable correlation (scan/attack), behavioral profiling, 5-min status, reports |
 | API | Backend | FastAPI | Auth, settings, data endpoints, WebSocket live feed |
 | UI | Frontend | React + Vite | Dashboard, attacker map, correlation/behavior views, reports, settings |
@@ -131,11 +131,22 @@ module that wants the full command transcript).
 3. **Pipeline** tails those files, normalizes to the canonical schema, `XADD`s to the
    Redis stream `events`, and bulk-inserts into the `events` hypertable. New IPs are
    pushed to the `enrich:queue` stream.
-4. **Enrichment** consumes `enrich:queue`, fans out to all five providers in parallel
-   via `MultiProvider` (CrowdSec CTI, AbuseIPDB, GreyNoise, VirusTotal, Abuse.ch Feodo Tracker),
-   merges results (worst reputation wins, highest confidence wins, categories union),
-   and upserts `ip_enrichment`. Each provider's raw response is stored separately for
-   forensics.
+4. **Enrichment** consumes `enrich:queue` via the default `tiered` provider. Tier-1
+   local feeds (Abuse.ch Feodo Tracker + ThreatFox, the local CrowdSec engine's
+   decisions incl. the free CAPI community blocklist, GeoLite2 geo/ASN) always run
+   first — unlimited, in-memory, and a Tier-1 hit is a verdict, not a trigger: feed-listed
+   IPs spend no Tier-2 quota. Tier-2 escalates only once activity crosses
+   `TIER2_MIN_EVENTS`/`TIER2_MIN_THREAT_SCORE`: GreyNoise runs first, and AbuseIPDB only
+   if GreyNoise comes back inconclusive (or throttled) and the IP is high-threat
+   (`TIER2_HIGH_THREAT_SCORE`). Each Tier-2 provider enforces its own budget/backoff
+   (`ABUSEIPDB_DAILY_QUOTA`; GreyNoise's small weekly community quota gets a multi-hour
+   429 cooldown) and stubs out rather than overspending — a deferred verdict stays
+   `unknown` and the hourly refresh loop re-queues it on its own retry schedule once
+   quota allows, independent of whether the source IP has been seen again. Results
+   merge (worst reputation wins, highest confidence wins, categories union) into
+   `ip_enrichment`; each provider's raw response is kept separately for forensics.
+   (`multi` — fan out to all providers in parallel on every lookup — remains available
+   as a simpler, higher-API-spend alternative; see §7.)
 5. **Analytics** consumes the `events` stream:
    - `ScanDetector` flags an IP touching ≥N distinct ports in a window → `scan_events`.
    - `AttackDetector` flags brute force / post-auth commands / IDS exploit sigs → `attack_events`.
@@ -152,23 +163,34 @@ module that wants the full command transcript).
 
 ## 7. Modularity / extension points (explicitly requested)
 
-- **Intel providers — five built in, easily extended:** the system ships with five
-  providers behind a common `EnrichmentProvider` interface:
+- **Intel providers — behind a common `EnrichmentProvider` interface, easily extended:**
 
   | Provider | Key required | Notes |
   |---|---|---|
-  | `crowdsec` | Optional (CTI key) | Default single-provider mode; falls back to local LAPI decisions |
+  | `tiered` | Optional (GreyNoise/AbuseIPDB improve coverage) | **Default & recommended** — Tier-1 free local feeds always run; Tier-2 (GreyNoise → AbuseIPDB) escalates only past an activity threshold, quota-gated (see §6) |
+  | `crowdsec` | Optional (CTI key) | Single-provider mode; falls back to local LAPI decisions |
   | `abuseipdb` | Yes | Free tier: 1 000 checks/day |
-  | `greynoise` | Optional | Community API works without a key, limited results |
-  | `virustotal` | Yes | Free tier: 500 lookups/day |
+  | `greynoise` | Optional | Community API works without a key; a small weekly allowance, easily exhausted at honeypot volume |
+  | `virustotal` | Yes | Free tier: 500 lookups/day; ToS forbids commercial use of the free tier |
   | `abusech` | No | Abuse.ch Feodo Tracker botnet C2 blocklist; no key needed |
-  | `multi` | — | **Recommended** — queries all providers in parallel and merges results |
+  | `multi` | — | Fans out to all providers in parallel on every lookup, merges by worst reputation; simpler but spends far more Tier-2 quota than `tiered` at the same volume |
 
-  Merge logic: most severe reputation wins (malicious > suspicious > unknown > clean),
-  highest confidence score wins, `is_known_attacker` is true if any provider flags the
-  IP, geo/ASN uses the first non-null value, categories are the union of all providers.
+  Merge logic (used by both `tiered`'s own Tier-1/Tier-2 merge and by `multi`): most
+  severe reputation wins (malicious > suspicious > unknown > clean), highest confidence
+  score wins, `is_known_attacker` is true if any provider flags the IP, geo/ASN uses the
+  first non-null value, categories are the union of all providers.
+
+  **Quota safety & retry semantics (`tiered`):** each Tier-2 provider is expected to be
+  rate-limited under sustained honeypot traffic — that's normal, not a fault condition.
+  A provider that's over budget or in backoff returns a stub, the merged row records
+  which providers ran vs. were `tier2_deferred`, and stays `unknown` if no provider
+  produced a verdict. The worker's hourly refresh loop (`enrichment/worker.py`)
+  re-queues deferred/unknown rows on their own retry schedule (`REFRESH_RETRY`)
+  regardless of whether the source IP has been seen again since — otherwise a one-off
+  scanner that hit during a quota-exhausted window would never get revisited and would
+  sit `unknown` forever, even though Tier-1 may already show it as active.
   To add a custom provider: subclass `EnrichmentProvider` in `enrichment/providers.py`,
-  decorate with `@register`, flip `ENRICHMENT_PROVIDER=multi` in `.env`.
+  decorate with `@register`.
 - **Add a correlation/behavioral module:** subclass `Detector` in
   `analytics/correlation/` (or a profiler in `analytics/behavioral/`), drop it in the
   registry. Engine auto-loads enabled detectors from config.
