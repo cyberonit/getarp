@@ -43,7 +43,8 @@ async def get_doc(request: Request, name: str):
     if not os.path.isfile(path):
         raise HTTPException(404, "not found")
     media_type = DOC_MEDIA_TYPES.get(os.path.splitext(name)[1], "application/octet-stream")
-    return FileResponse(path, media_type=media_type, filename=name)
+    return FileResponse(path, media_type=media_type, filename=name,
+                        headers={"Cache-Control": "no-cache"})
 
 
 @router.get("/ips")
