@@ -17,8 +17,10 @@ router = APIRouter(prefix="/api", tags=["data"])
 
 DOCS_DIR = os.environ.get("DOCS_DIR", "/app/docs")
 ALLOWED_DOCS = {
-    "hld.pdf": "High-Level Design",
+    "HIGH_LEVEL_DESIGN.md": "High-Level Design",
+    "hld.pdf": "High-Level Design (PDF)",
 }
+DOC_MEDIA_TYPES = {".pdf": "application/pdf", ".md": "text/markdown"}
 
 
 @router.get("/docs")
@@ -40,7 +42,8 @@ async def get_doc(request: Request, name: str):
     path = os.path.join(DOCS_DIR, name)
     if not os.path.isfile(path):
         raise HTTPException(404, "not found")
-    return FileResponse(path, media_type="application/pdf", filename=name)
+    media_type = DOC_MEDIA_TYPES.get(os.path.splitext(name)[1], "application/octet-stream")
+    return FileResponse(path, media_type=media_type, filename=name)
 
 
 @router.get("/ips")
