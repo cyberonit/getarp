@@ -81,8 +81,11 @@ def _db_creds():
 
 async def refresh_loop(pool, r):
     """Hourly: re-queue enrichment for IPs with no enrichment row at all (missed
-    while the worker was down or misconfigured), plus IPs still active in the
-    last 24h whose intel is stale or which never got a verdict."""
+    while the worker was down or misconfigured), IPs still active in the last
+    24h whose intel is stale, and IPs whose Tier-2 lookup was deferred by a
+    quota gate — the last group is retried regardless of recency, since a
+    one-off scanner that hit during a quota-exhausted window would otherwise
+    never get a verdict (see enrichment/tests/test_quota_resilience.py)."""
     while True:
         try:
             async with pool.acquire() as con:
@@ -91,9 +94,10 @@ async def refresh_loop(pool, r):
                         FROM ips i LEFT JOIN ip_enrichment e ON e.src_ip = i.src_ip
                         WHERE e.src_ip IS NULL
                            OR (i.last_seen > now() - interval '24 hours'
-                               AND (e.updated_at < now() - interval '{REFRESH_STALE}'
-                                    OR (e.reputation = 'unknown'
-                                        AND e.updated_at < now() - interval '{REFRESH_RETRY}')))
+                               AND e.updated_at < now() - interval '{REFRESH_STALE}')
+                           OR (e.reputation = 'unknown'
+                               AND jsonb_array_length(e.raw->'tiered'->'tier2_deferred') > 0
+                               AND e.updated_at < now() - interval '{REFRESH_RETRY}')
                         ORDER BY e.updated_at ASC NULLS FIRST LIMIT $1""", REFRESH_BATCH)
             for row in rows:
                 await r.xadd(ENRICH_STREAM, {"src_ip": row["ip"], "force": "1"},

@@ -8,9 +8,13 @@ calls/day against a 1000/day quota.
 These tests simulate real 429 responses and assert on SpyAsyncClient call
 counts: the stack must stay within budget even when providers are throttled.
 """
+import asyncio
+import contextlib
+import json
 import time
 
 import providers as providers_mod
+import worker as worker_mod
 from conftest import (BASE_SETTINGS, FakeRedis, SpyAsyncClient, SpyResponse,
                       drive_consume, make_tiered, seed_ip)
 
@@ -146,3 +150,52 @@ async def test_deferred_stub_costs_nothing(pool, spy):
         await tiered.enrich(ip)
     assert spy.calls == before, (
         f"throttled providers still made HTTP calls: {spy.calls} != {before}")
+
+
+async def _seed_stale_deferred(pool, ip: str, *, deferred: list[str],
+                               last_seen_hours_ago: float) -> None:
+    """A one-off scanner: seen once, long enough ago that refresh_loop's 24h
+    activity window has already closed on it, left 'unknown' by a Tier-2
+    quota gate (or genuinely below the escalation threshold if deferred=[])."""
+    await seed_ip(pool, ip, event_count=1, threat_score=75)
+    raw = {"tiered": {"tier2_ran": [], "tier2_deferred": deferred,
+                      "tier2_reason": "active" if deferred else "below-threshold"}}
+    async with pool.acquire() as con:
+        await con.execute(
+            "UPDATE ips SET last_seen = now() - make_interval(hours => $2) "
+            "WHERE src_ip = $1", ip, last_seen_hours_ago)
+        await con.execute(
+            """INSERT INTO ip_enrichment (src_ip, provider, reputation, raw, updated_at)
+               VALUES ($1, 'tiered', 'unknown', $2,
+                       now() - make_interval(hours => $3))""",
+            ip, json.dumps(raw), last_seen_hours_ago)
+
+
+async def test_refresh_loop_retries_deferred_ip_past_24h(pool):
+    """PRODUCTION INCIDENT (found 2026-07-24): a scanner hit once, its Tier-2
+    lookup got deferred by a quota gate, and it never came back — 1,165 such
+    IPs sat 'unknown' for up to two weeks. refresh_loop only retried rows for
+    IPs seen in the last 24h, so a one-off attacker's deferred verdict was
+    never revisited. Deferred rows must be retried on their own schedule
+    (REFRESH_RETRY), independent of last_seen recency."""
+    stuck = "203.0.113.50"     # deferred, last seen 10 days ago
+    below_threshold = "203.0.113.52"  # genuinely unknown, never deferred — must NOT churn
+    await _seed_stale_deferred(pool, stuck, deferred=["abuseipdb"],
+                               last_seen_hours_ago=240)
+    await _seed_stale_deferred(pool, below_threshold, deferred=[],
+                               last_seen_hours_ago=240)
+
+    r = FakeRedis()
+    task = asyncio.get_event_loop().create_task(worker_mod.refresh_loop(pool, r))
+    await asyncio.sleep(0.2)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    requeued = {fields["src_ip"] for _, fields in r._stream}
+    assert stuck in requeued, (
+        "deferred IP past the 24h activity window was never retried — "
+        "the exact 2026-07-24 incident")
+    assert below_threshold not in requeued, (
+        "a genuinely below-threshold unknown (never deferred) must not be "
+        "churned forever just because it's old")
