@@ -1,5 +1,5 @@
 fastapi==0.141.1
-uvicorn==0.52.0
+uvicorn==0.52.1
 websockets==17.0.1          # required for /api/ws/status; bare uvicorn 404s upgrade requests
 asyncpg==0.31.0
 redis==8.1.0
