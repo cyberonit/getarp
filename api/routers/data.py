@@ -351,6 +351,7 @@ async def report_csv(request: Request, rid: int = Path(ge=1, le=2_147_483_647)):
     w.writerow([])
     w.writerow(["total_events", summary.get("events", "")])
     w.writerow(["unique_ips", summary.get("unique_ips", "")])
+    w.writerow(["new_ips", summary.get("new_ips", "")])
     w.writerow(["scans", summary.get("scans", "")])
     w.writerow(["blocked_ips", summary.get("blocked_ips", "")])
     w.writerow([])

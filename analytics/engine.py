@@ -335,6 +335,11 @@ class Engine:
                 f"SELECT count(*) FROM events WHERE ts > now() - interval '{span}'")
             ips = await con.fetchval(
                 f"SELECT count(DISTINCT src_ip) FROM events WHERE ts > now() - interval '{span}'")
+            # first_seen (not last_seen) so this counts hosts genuinely new to
+            # getarp, not just active — distinct from unique_ips above, which
+            # includes recurring scanners re-hitting the honeypot.
+            new_ips = await con.fetchval(
+                f"SELECT count(*) FROM ips WHERE first_seen > now() - interval '{span}'")
             scans = await con.fetchval(
                 f"SELECT count(*) FROM ips WHERE classification IN ('scanner','prober') "
                 f"AND last_seen > now() - interval '{span}'")
@@ -347,7 +352,7 @@ class Engine:
                 f"WHERE i.last_seen > now() - interval '{span}' "
                 f"ORDER BY i.threat_score DESC LIMIT 20")
             summary = {
-                "events": total, "unique_ips": ips, "scans": scans,
+                "events": total, "unique_ips": ips, "new_ips": new_ips, "scans": scans,
                 "blocked_ips": blocked,
                 "attacks_by_type": [dict(r) for r in attacks],
                 "top_attackers": [dict(r) for r in top],
@@ -375,7 +380,7 @@ class Engine:
                       for a in s["attacks_by_type"])
         return f"""<html><body style="font-family:system-ui">
 <h1>getarp.net {esc(kind)} report</h1>
-<p>Events: {esc(str(s['events']))} &middot; Unique IPs: {esc(str(s['unique_ips']))} &middot; Scans: {esc(str(s['scans']))} &middot; IPs blocked: {esc(str(s.get('blocked_ips', 0)))}</p>
+<p>Events: {esc(str(s['events']))} &middot; Unique IPs: {esc(str(s['unique_ips']))} &middot; New IPs: {esc(str(s.get('new_ips', 0)))} &middot; Scans: {esc(str(s['scans']))} &middot; IPs blocked: {esc(str(s.get('blocked_ips', 0)))}</p>
 <h3>Attacks by type</h3><ul>{atk}</ul>
 <h3>Top attackers</h3>
 <table border=1 cellpadding=4><tr><th>IP</th><th>Score</th><th>Class</th><th>Country</th><th>AS</th><th>Org</th></tr>

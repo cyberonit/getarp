@@ -331,6 +331,7 @@ export function Reports() {
               <tbody>
                 <tr><td className="muted">events</td><td>{s.events?.toLocaleString() ?? '—'}</td></tr>
                 <tr><td className="muted">unique IPs</td><td>{s.unique_ips?.toLocaleString() ?? '—'}</td></tr>
+                <tr><td className="muted">new IPs</td><td>{s.new_ips?.toLocaleString() ?? '—'}</td></tr>
                 <tr><td className="muted">scanners / probers</td><td>{s.scans?.toLocaleString() ?? '—'}</td></tr>
                 <tr><td className="muted">known attackers</td><td>{s.blocked_ips?.toLocaleString() ?? '0'}</td></tr>
               </tbody>

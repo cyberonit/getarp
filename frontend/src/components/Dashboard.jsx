@@ -59,6 +59,9 @@ export default function Dashboard({ onPick }) {
           <div className="k">events / min</div>
           <div className="v">{status.events_per_min != null ? Math.round(status.events_per_min) : '—'}</div><div className="spark" /></div>
         <div className="stat">
+          <div className="k">new ips · 24h</div>
+          <div className="v" style={{ color: 'var(--text)' }}>{status.new_ips_24h ?? '—'}</div><div className="spark" /></div>
+        <div className="stat">
           <div className="k">tracked hosts</div>
           <div className="v" style={{ color: 'var(--text)' }}>{status.tracked_hosts ?? '—'}</div><div className="spark" /></div>
       </div>

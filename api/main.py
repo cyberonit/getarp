@@ -141,12 +141,17 @@ async def status_now(request: Request):
         live_attackers = await con.fetchval(
             "SELECT count(DISTINCT src_ip) FROM events WHERE ts>now()-interval '5 min'")
         tracked_hosts = await con.fetchval("SELECT count(*) FROM ips")
+        # first_seen, not last_seen: hosts genuinely new today, as opposed to
+        # tracked_hosts (all-time) or live_attackers (mostly recurring scanners).
+        new_ips_24h = await con.fetchval(
+            "SELECT count(*) FROM ips WHERE first_seen > now() - interval '1 day'")
         recent_attacks = await con.fetch(
             "SELECT ts, host(src_ip) AS src_ip, attack_type, service FROM attack_events "
             "ORDER BY ts DESC LIMIT 10")
     out = dict(snap) if snap else {}
     out["live_attackers"] = live_attackers or 0
     out["tracked_hosts"] = tracked_hosts or 0
+    out["new_ips_24h"] = new_ips_24h or 0
     out["recent_attacks"] = [dict(r) for r in recent_attacks]
     return out
 
