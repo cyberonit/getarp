@@ -25,10 +25,14 @@ function providerHint(data) {
   return ''
 }
 
+// Metadata-only providers (e.g. geolite) never set a reputation — they're
+// shown via the merged country/asn/org fields, not as a source row here.
+const METADATA_ONLY = new Set(['geolite'])
+
 function IntelSources({ raw }) {
   if (!raw || typeof raw !== 'object') return null
-  const providers = Object.entries(raw).filter(([, v]) => v && typeof v === 'object' && !v.error)
-  const errors = Object.entries(raw).filter(([, v]) => v && v.error)
+  const providers = Object.entries(raw).filter(([k, v]) => v && typeof v === 'object' && !v.error && !METADATA_ONLY.has(k))
+  const errors = Object.entries(raw).filter(([k, v]) => v && v.error && !METADATA_ONLY.has(k))
   if (!providers.length && !errors.length) return null
   return (
     <>
