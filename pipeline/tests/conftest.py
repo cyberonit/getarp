@@ -31,14 +31,27 @@ class SpyRedis:
         self.streams[stream].append(fields)
 
 
+def _reject_nuls(args):
+    """Mimic Postgres, which stores NUL (U+0000) in neither text nor jsonb.
+    Without this the spy silently accepts payloads the real database rejects,
+    so a NUL-handling regression would pass the suite and only surface in
+    production as a dropped event."""
+    for a in args:
+        if isinstance(a, str) and ("\x00" in a or "\\u0000" in a):
+            raise ValueError(
+                'invalid byte sequence for encoding "UTF8": 0x00')
+
+
 class _SpyCon:
     def __init__(self, log):
         self.log = log
 
     async def execute(self, sql, *args):
+        _reject_nuls(args)
         self.log.append(("execute", sql, args))
 
     async def fetchrow(self, sql, *args):
+        _reject_nuls(args)
         self.log.append(("fetchrow", sql, args))
         return {"inserted": True}
 

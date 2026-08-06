@@ -208,6 +208,35 @@ async def tail(path: str, queue: asyncio.Queue, sensor: str):
 
 
 # ───────────────────────── writers ─────────────────────────
+# Postgres cannot store NUL (U+0000) in either text or jsonb: a text column
+# rejects the raw byte ("invalid byte sequence for encoding UTF8: 0x00") and
+# jsonb rejects the escaped form json.dumps produces ("unsupported Unicode
+# escape sequence"). A single NUL in a payload therefore fails both the events
+# insert and its raw column.
+#
+# Attackers emit NULs routinely — overflow probes, protocol fuzzing, binary
+# junk down a text port — and the insert error previously dropped the whole
+# event: no events row, no ips upsert, no analytics stream, no enrich queue.
+# That let a source stay invisible to scoring and enrichment just by including
+# a NUL byte, so this is a (low-grade) evasion path, not only lost data.
+#
+# Replace rather than strip, so the payload keeps its shape and the tampering
+# stays visible in the UI; the raw sensor log on disk retains the original
+# bytes regardless.
+NUL_REPLACEMENT = "�"
+
+
+def _strip_nulls(value):
+    """Recursively replace NUL characters in any string within value."""
+    if isinstance(value, str):
+        return value.replace("\x00", NUL_REPLACEMENT) if "\x00" in value else value
+    if isinstance(value, dict):
+        return {_strip_nulls(k): _strip_nulls(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_strip_nulls(v) for v in value]
+    return value
+
+
 def _redact_password(pw):
     """Store a length hint instead of the actual password to preserve analytics
     value (password length distribution, blank-vs-set) without keeping PII."""
@@ -232,6 +261,9 @@ async def consumer(queue: asyncio.Queue, pool, r):
         e = NORMALIZERS[sensor](record)
         if not e:
             continue
+        # Before anything touches the DB or the bus, so every downstream
+        # consumer sees the same storable payload.
+        e = _strip_nulls(e)
         try:
             parsed_ip = ipaddress.ip_address(e["src_ip"])
         except (ValueError, TypeError):
@@ -258,7 +290,11 @@ async def consumer(queue: asyncio.Queue, pool, r):
                 )
                 is_new = await _upsert_ip(con, e)
         except Exception as ex:
-            print(f"[pipeline] db error: {str(ex).replace(chr(10), ' ').replace(chr(13), '')}", flush=True)
+            # Include enough context to identify the offending stream without
+            # logging the payload itself (it may carry credentials).
+            print(f"[pipeline] db error [{e.get('sensor')} {e.get('src_ip')} "
+                  f"{e.get('event_type')}]: "
+                  f"{str(ex).replace(chr(10), ' ').replace(chr(13), '')}", flush=True)
             continue
         # publish to the bus
         payload = {k: ("" if v is None else str(v)) for k, v in e.items() if k != "raw"}
