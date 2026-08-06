@@ -31,13 +31,22 @@ rotate() {
     # rotate FILE — rename, recreate with the same owner, so the writer never
     # blocks. Ownership matters: Suricata chowns its logs to its run-as user
     # on reopen, which fails with EPERM if root owns the new file.
+    #
+    # Mode MUST stay 666 (world-writable), not 664: "owner" above is whichever
+    # uid happened to stat the file, which for eve.json/fast.log is Suricata
+    # (the actual writer, so 664 would still work) but for extra.json is not
+    # necessarily extra-services' own uid (10001) — this directory has three
+    # different container uids writing into it (see header), so 664 silently
+    # locked extra-services out until the next manual fix. Learned this the
+    # hard way: 2026-08-06, extra-services logging broke for ~7 min the first
+    # time this cron actually ran.
     local f="$DIR/$1" owner
     [[ -s "$f" ]] || return 0
     owner=$(stat -c '%u:%g' "$f")
     mv "$f" "$f.$STAMP"
     # recreate immediately so the pipeline's inode check finds the new file
     # and drains the renamed one
-    touch "$f" && chown "$owner" "$f" && chmod 664 "$f"
+    touch "$f" && chown "$owner" "$f" && chmod 666 "$f"
 }
 
 rotate eve.json
