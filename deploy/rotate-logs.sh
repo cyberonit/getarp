@@ -19,6 +19,11 @@ set -euo pipefail
 KEEP_DAYS="${KEEP_DAYS:-14}"    # compressed raw logs kept for forensics;
                                 # postgres is the system of record (3y retention)
 
+# Shared group for sensor-written logs. Every writer either runs with this gid
+# (cowrie 999:999, extra-services 10001:999) or runs as root (suricata), so
+# group-write at 664 is sufficient and the volume needs no world-writable files.
+SENSOR_GID="${SENSOR_GID:-999}"
+
 command -v docker >/dev/null || exit 0
 VOL=$(docker volume ls -q --filter name=honeypot_logs | head -1)
 [[ -n "$VOL" ]] || exit 0
@@ -28,25 +33,35 @@ DIR=$(docker volume inspect -f '{{.Mountpoint}}' "$VOL")
 STAMP=$(date +%F)
 
 rotate() {
-    # rotate FILE — rename, recreate with the same owner, so the writer never
-    # blocks. Ownership matters: Suricata chowns its logs to its run-as user
-    # on reopen, which fails with EPERM if root owns the new file.
+    # rotate FILE — rename, then recreate it writable by the sensor that owns
+    # the stream, so the writer never blocks.
     #
-    # Mode MUST stay 666 (world-writable), not 664: "owner" above is whichever
-    # uid happened to stat the file, which for eve.json/fast.log is Suricata
-    # (the actual writer, so 664 would still work) but for extra.json is not
-    # necessarily extra-services' own uid (10001) — this directory has three
-    # different container uids writing into it (see header), so 664 silently
-    # locked extra-services out until the next manual fix. Learned this the
-    # hard way: 2026-08-06, extra-services logging broke for ~7 min the first
-    # time this cron actually ran.
-    local f="$DIR/$1" owner
+    # Group is what makes this work, and it must be set explicitly: the
+    # pre-rotation owner is NOT a reliable guide to who actually writes the
+    # file. extra.json was owned by uid 998 while extra-services runs as 10001,
+    # so preserving owner alone and using 664 silently locked it out of its own
+    # log (2026-08-06). Forcing SENSOR_GID covers every writer at 664 instead
+    # of reaching for a world-writable 666, which would let any one compromised
+    # sensor container tamper with the other sensors' logs.
+    #
+    # Owner is still preserved because Suricata chowns its logs to its run-as
+    # user on reopen, which fails with EPERM if root owns the new file.
+    local f="$DIR/$1" owner target
     [[ -s "$f" ]] || return 0
-    owner=$(stat -c '%u:%g' "$f")
-    mv "$f" "$f.$STAMP"
+    target="$f.$STAMP"
+    # A second run on the same day (manual test, cron retry) collides: gzip
+    # will not overwrite the existing archive, orphaning an uncompressed file
+    # that the *.gz prune below never reclaims. Uniquify rather than clobber.
+    [[ -e "$target" || -e "$target.gz" ]] && target="$f.$STAMP-$(date +%H%M%S)"
+    owner=$(stat -c '%u' "$f")
+    mv "$f" "$target"
     # recreate immediately so the pipeline's inode check finds the new file
     # and drains the renamed one
-    touch "$f" && chown "$owner" "$f" && chmod 666 "$f"
+    touch "$f" && chown "$owner:$SENSOR_GID" "$f" && chmod 664 "$f"
+    # Fail loudly rather than silently losing a sensor: both outages this
+    # volume has had were invisible until someone went looking.
+    [[ "$(stat -c '%g %a' "$f")" == "$SENSOR_GID 664" ]] \
+        || echo "getarp-logs: WARNING $f is $(stat -c '%U:%G %a' "$f"), expected gid $SENSOR_GID mode 664" >&2
 }
 
 rotate eve.json
