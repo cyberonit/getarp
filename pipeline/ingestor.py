@@ -29,6 +29,29 @@ LOG_DIR = os.environ.get("LOG_DIR", "/data/logs")
 SELF_IPS = frozenset(
     ip.strip()
     for ip in os.environ.get("SENSOR_PUBLIC_IP", "").split(",") if ip.strip())
+# Drop RFC1918/loopback/link-local sources. Nothing routable on the public
+# internet can reach the sensors from these ranges — in practice they are the
+# host probing its own honeypot (localhost curl/ssh arrives NAT'd as the Docker
+# bridge gateway, e.g. 172.21.0.1) or container-to-container chatter. Left in,
+# they surface as phantom "sweep" rows in scan correlation, because one probe
+# per service looks exactly like a port sweep. Set DROP_PRIVATE_SRC=0 if this
+# sensor is ever deployed to watch an internal segment on purpose.
+#
+# Listed explicitly rather than using ipaddress.is_private, which also covers
+# the TEST-NET documentation ranges (192.0.2.0/24, 198.51.100.0/24,
+# 203.0.113.0/24) — those are what the tests use for synthetic attacker IPs,
+# and dropping them would silently gut the fixtures.
+PRIVATE_SRC_NETS = tuple(ipaddress.ip_network(n) for n in (
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",   # RFC1918
+    "127.0.0.0/8", "169.254.0.0/16",                   # loopback, link-local
+    "::1/128", "fe80::/10", "fc00::/7",                # IPv6 equivalents
+))
+DROP_PRIVATE_SRC = os.environ.get("DROP_PRIVATE_SRC", "1").lower() not in ("0", "false", "no")
+
+
+def _is_private_src(parsed_ip) -> bool:
+    return any(parsed_ip in net for net in PRIVATE_SRC_NETS
+               if net.version == parsed_ip.version)
 FILES = {
     "cowrie.json": "cowrie",
     "eve.json": "suricata",
@@ -210,8 +233,10 @@ async def consumer(queue: asyncio.Queue, pool, r):
         if not e:
             continue
         try:
-            ipaddress.ip_address(e["src_ip"])
+            parsed_ip = ipaddress.ip_address(e["src_ip"])
         except (ValueError, TypeError):
+            continue
+        if DROP_PRIVATE_SRC and _is_private_src(parsed_ip):
             continue
         if e["src_ip"] in SELF_IPS:
             continue
@@ -308,7 +333,8 @@ async def main():
     tasks = [asyncio.create_task(tail(os.path.join(LOG_DIR, f), queue, s))
              for f, s in FILES.items()]
     tasks += [asyncio.create_task(consumer(queue, pool, r)) for _ in range(3)]
-    print("[pipeline] ingesting:", list(FILES), flush=True)
+    print("[pipeline] ingesting:", list(FILES),
+          "| drop_private_src:", DROP_PRIVATE_SRC, flush=True)
     await asyncio.gather(*tasks)
 
 

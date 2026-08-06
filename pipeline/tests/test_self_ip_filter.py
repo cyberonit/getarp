@@ -52,3 +52,38 @@ async def test_unconfigured_filter_drops_nothing(drive_consumer, monkeypatch):
         _suricata_alert("192.0.2.1", 21, "203.0.113.10", 57889),
     ])
     assert len(r.streams[ingestor.EVENTS_STREAM]) == 1
+
+
+async def test_private_source_events_are_dropped(drive_consumer):
+    """Probing the honeypot from the host arrives NAT'd as the Docker bridge
+    gateway; one probe per service otherwise looks like a port sweep and shows
+    up as a phantom row in scan correlation."""
+    pool, r = await drive_consumer([
+        _suricata_alert("172.21.0.1", 51000, "192.0.2.1", 2222),
+        _suricata_alert("10.0.0.5", 51001, "192.0.2.1", 8080),
+        _suricata_alert("127.0.0.1", 51002, "192.0.2.1", 6379),
+        _suricata_alert("fe80::1", 51003, "192.0.2.1", 3306),
+    ])
+    assert pool.log == []
+    assert r.streams == {}
+
+
+async def test_documentation_ranges_are_not_treated_as_private(drive_consumer):
+    """ipaddress.is_private covers TEST-NET (192.0.2.0/24, 198.51.100.0/24,
+    203.0.113.0/24), which every fixture here uses for synthetic attackers.
+    The filter must key off real private ranges only, or it guts the suite."""
+    pool, r = await drive_consumer([
+        _suricata_alert("203.0.113.10", 57889, "192.0.2.1", 21),
+        _suricata_alert("198.51.100.5", 57890, "192.0.2.1", 21),
+    ])
+    assert len(r.streams[ingestor.EVENTS_STREAM]) == 2
+
+
+async def test_private_filter_can_be_disabled(drive_consumer, monkeypatch):
+    """An internal-segment deployment sets DROP_PRIVATE_SRC=0 and must get its
+    RFC1918 traffic back."""
+    monkeypatch.setattr(ingestor, "DROP_PRIVATE_SRC", False)
+    pool, r = await drive_consumer([
+        _suricata_alert("172.21.0.1", 51000, "192.0.2.1", 2222),
+    ])
+    assert len(r.streams[ingestor.EVENTS_STREAM]) == 1
