@@ -78,7 +78,7 @@ services:
     security_opt: ["no-new-privileges:true"]
     deploy:
       resources:
-        limits: { cpus: "0.5", memory: 768M }
+        limits: { cpus: "0.5", memory: 512M }
     logging: *default-logging
 
   extra-services:
@@ -145,7 +145,7 @@ services:
       - crowdsec_config:/etc/crowdsec
     deploy:
       resources:
-        limits: { cpus: "0.5", memory: 1G }
+        limits: { cpus: "0.5", memory: 256M }
     logging: *default-logging
 
   # NOTE: cs-firewall-bouncer is a HOST service (no official Docker image exists).
@@ -157,7 +157,10 @@ services:
     image: redis:7.2-alpine
     restart: unless-stopped
     networks: [data_net]
-    command: redis-server --save "" --requirepass ${REDIS_PASSWORD} --maxmemory 768mb --maxmemory-policy allkeys-lru
+    # maxmemory must stay comfortably under the container limit below, or the
+    # OOM killer wins the race against Redis's own LRU eviction. Streams are
+    # additionally trimmed via MAXLEN at the producer (measured usage: ~11 MB).
+    command: redis-server --save "" --requirepass ${REDIS_PASSWORD} --maxmemory 384mb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 5s
@@ -166,7 +169,7 @@ services:
       start_period: 5s
     deploy:
       resources:
-        limits: { cpus: "0.25", memory: 1G }
+        limits: { cpus: "0.25", memory: 512M }
     logging: *default-logging
 
   postgres:
@@ -182,6 +185,32 @@ services:
         -c app.enrichment_password=${SVC_ENRICHMENT_PASSWORD:-}
         -c app.analytics_password=${SVC_ANALYTICS_PASSWORD:-}
         -c app.api_password=${SVC_API_PASSWORD:-}
+    # Pinned tuning for a 4 vCPU / 8 GB VM. Without these the timescaledb image
+    # auto-tunes on first boot and writes postgresql.conf *into the pgdata
+    # volume*, so the settings are a property of whichever host created the
+    # volume rather than of this repo — this deployment inherited a 15.6 GB
+    # profile (shared_buffers 3.9 GB, work_mem 61 MB, max_connections 100) that
+    # does not fit the target VM and would not travel with a restored volume.
+    # Command-line flags override postgresql.conf, so these win on any host.
+    # Re-tune deliberately if the VM is resized — they will NOT auto-adjust.
+    #
+    # work_mem is per sort/hash node, not per connection: the service pools sum
+    # to 32 connections (api 10 + analytics 10 + pipeline 8 + enrichment 4), so
+    # max_connections 50 is ample and keeps the worst case bounded. 16 MB still
+    # leaves the widest join in the app (the /api/ips hash, measured 3.9 MB)
+    # single-batch.
+    #
+    # max_worker_processes must cover timescaledb.max_background_workers +
+    # max_parallel_workers + a few spare, hence 8 + 2 + 3.
+    command: >-
+      postgres
+      -c shared_buffers=2GB
+      -c effective_cache_size=4GB
+      -c work_mem=16MB
+      -c maintenance_work_mem=512MB
+      -c max_connections=50
+      -c max_worker_processes=13
+      -c timescaledb.max_background_workers=8
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -194,8 +223,10 @@ services:
     deploy:
       resources:
         # sized for a 4 vCPU / 8 GB VM — leaves room for Suricata + the
-        # Python services; raise if the VM grows
-        limits: { cpus: "2", memory: 4G }
+        # Python services; raise if the VM grows. Must stay above
+        # shared_buffers + maintenance_work_mem + (work_mem x concurrent sorts)
+        # with headroom; at 2 GB + 512 MB pinned above, 3 GB is the floor.
+        limits: { cpus: "2", memory: 3G }
     logging: *default-logging
 
   # ─────────────────── INGEST / ENRICH / ANALYTICS ────────────────────────
@@ -224,7 +255,7 @@ services:
         condition: service_healthy
     deploy:
       resources:
-        limits: { cpus: "0.5", memory: 1G }
+        limits: { cpus: "0.5", memory: 256M }
     logging: *default-logging
 
   enrichment:
@@ -270,7 +301,7 @@ services:
         condition: service_started
     deploy:
       resources:
-        limits: { cpus: "0.5", memory: 1G }
+        limits: { cpus: "0.5", memory: 512M }
     logging: *default-logging
 
   analytics:
@@ -301,7 +332,7 @@ services:
         condition: service_healthy
     deploy:
       resources:
-        limits: { cpus: "1", memory: 2G }
+        limits: { cpus: "0.5", memory: 512M }
     logging: *default-logging
 
   # ─────────────────────────── API + UI + EDGE ────────────────────────────
@@ -340,7 +371,7 @@ services:
         condition: service_healthy
     deploy:
       resources:
-        limits: { cpus: "0.5", memory: 1G }
+        limits: { cpus: "0.5", memory: 384M }
     logging: *default-logging
 
   frontend:
@@ -354,7 +385,7 @@ services:
     security_opt: ["no-new-privileges:true"]
     deploy:
       resources:
-        limits: { cpus: "0.25", memory: 256M }
+        limits: { cpus: "0.25", memory: 128M }
     logging: *default-logging
 
   caddy:
@@ -366,7 +397,7 @@ services:
     security_opt: ["no-new-privileges:true"]
     deploy:
       resources:
-        limits: { cpus: "1", memory: 2G }
+        limits: { cpus: "0.5", memory: 256M }
     environment:
       ADMIN_IP: ${ADMIN_IP}
     ports:
