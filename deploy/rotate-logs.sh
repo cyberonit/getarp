@@ -32,6 +32,21 @@ DIR=$(docker volume inspect -f '{{.Mountpoint}}' "$VOL")
 
 STAMP=$(date +%F)
 
+# Converge the volume on the shared-group layout before touching anything:
+# setgid directory, gid $SENSOR_GID and mode 664 on every live file. Cheap and
+# idempotent, and it covers the files this script does NOT rotate — cowrie.json
+# and cowrie.log, which Cowrie rotates itself and therefore recreates with its
+# own umask, outside anything here. Installed to /usr/local/bin by setup.sh
+# because cron runs this script from /etc/cron.daily, away from the repo.
+# Non-fatal: rotation still has to happen even if normalization does not.
+for _fixperms in /usr/local/bin/getarp-fix-log-perms \
+                 "$(dirname "$0")/fix-log-perms.sh"; do
+    [[ -x "$_fixperms" ]] || continue
+    SENSOR_GID="$SENSOR_GID" bash "$_fixperms" || \
+        echo "getarp-logs: WARNING permission normalization failed" >&2
+    break
+done
+
 rotate() {
     # rotate FILE — rename, then recreate it writable by the sensor that owns
     # the stream, so the writer never blocks.

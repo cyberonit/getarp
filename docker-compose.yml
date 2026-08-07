@@ -9,6 +9,13 @@
 # official Docker image. It runs as a host-native systemd service, installed and wired
 # to the CrowdSec LAPI by bootstrap.sh / setup.sh.
 
+# A note on deploy.resources.limits below: they are caps, not reservations, and
+# they deliberately sum to more than the 8 GB VM. Measured steady-state usage
+# across the whole stack is ~1.4 GB; the caps exist to stop one runaway service
+# taking the host down, so each is sized for that service's worst case rather
+# than for a share of the total. The two that behave like reservations in
+# practice — postgres (shared_buffers) and suricata — are sized to fit
+# together with room to spare.
 x-logging: &default-logging
   driver: json-file
   options: { max-size: "10m", max-file: "3" }
@@ -231,12 +238,37 @@ services:
     logging: *default-logging
 
   # ─────────────────── INGEST / ENRICH / ANALYTICS ────────────────────────
+  # The three Python workers below share a liveness mechanism: each concurrent
+  # loop touches a file under /tmp/health on every iteration, an in-process
+  # watchdog exits the process when one goes stale, and the healthcheck here
+  # reports the same state to `docker ps`.
+  #
+  # The watchdog is what actually restarts a hang. Compose does not act on
+  # health status — `restart: unless-stopped` fires on process exit only, so an
+  # unhealthy container would otherwise sit there unhealthy for ever. See
+  # pipeline/heartbeat.py and the README.
   pipeline:
     build: ./pipeline
     restart: unless-stopped
     networks: [data_net]
+    # Pinned to match the Dockerfile rather than inherited from it: with a
+    # numeric uid Docker skips the image's passwd lookup, so the sensorlogs
+    # membership that makes the read-only log volume readable has to be granted
+    # explicitly here. 999 = sensorlogs, the group that owns honeypot_logs.
+    user: "1000:1000"
+    group_add: ["999"]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp/health"]      # heartbeats never touch disk
+    healthcheck:
+      # Interval sits just under the tail threshold (60s) so a stall is caught
+      # within roughly one threshold; retries then require three consecutive
+      # failures, i.e. ~90s of genuinely stalled ingest before it is reported.
+      test: ["CMD", "python", "/app/healthcheck.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     environment:
       PG_HOST: postgres
       PG_PORT: "5432"
@@ -247,6 +279,17 @@ services:
       SVC_DB_PASSWORD: ${SVC_PIPELINE_PASSWORD:-}
       SENSOR_PUBLIC_IP: ${SENSOR_PUBLIC_IP:-}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      INGEST_QUEUE_MAX: ${INGEST_QUEUE_MAX:-2000}
+      INGEST_CONSUMERS: ${INGEST_CONSUMERS:-3}
+      INGEST_ITEM_MAX_ATTEMPTS: ${INGEST_ITEM_MAX_ATTEMPTS:-4}
+      PIPELINE_TAIL_STALE_S: ${PIPELINE_TAIL_STALE_S:-60}
+      PIPELINE_CONSUMER_STALE_S: ${PIPELINE_CONSUMER_STALE_S:-120}
+      BACKOFF_BASE_S: ${BACKOFF_BASE_S:-1}
+      BACKOFF_MAX_S: ${BACKOFF_MAX_S:-60}
+      REDIS_SOCKET_TIMEOUT_S: ${REDIS_SOCKET_TIMEOUT_S:-30}
+      REDIS_CONNECT_TIMEOUT_S: ${REDIS_CONNECT_TIMEOUT_S:-10}
+      PG_COMMAND_TIMEOUT_S: ${PG_COMMAND_TIMEOUT_S:-30}
+      PG_CONNECT_TIMEOUT_S: ${PG_CONNECT_TIMEOUT_S:-10}
     volumes:
       - honeypot_logs:/data/logs:ro      # READ-ONLY: one-way telemetry crossing the boundary
       # Read offsets. The log volume is deliberately read-only, so the
@@ -260,15 +303,33 @@ services:
         condition: service_healthy
     deploy:
       resources:
-        limits: { cpus: "0.5", memory: 256M }
+        # 384M, up from 256M. Steady state is ~26 MB; the ceiling is the
+        # in-flight queue, which holds raw sensor records — a Suricata alert
+        # carries its payload, so a queued record is kilobytes. INGEST_QUEUE_MAX
+        # (2000, was 10000) caps that at a few tens of MB, and CPython does not
+        # hand freed arenas back to the OS, so a single flood sets the resident
+        # size for the rest of the container's life. The headroom is for that
+        # high-water mark, not for steady state.
+        limits: { cpus: "0.5", memory: 384M }
     logging: *default-logging
 
   enrichment:
     build: ./enrichment
     restart: unless-stopped
     networks: [data_net, egress_net]    # data_net: Redis/Postgres; egress_net: CTI APIs
+    user: "1000:1000"       # pinned; no sensorlogs group — reads no log volume
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp/health"]
+    healthcheck:
+      # Looser than the pipeline's: a Tier-2 chain is several provider calls
+      # with their own timeouts, and the feed loops legitimately go minutes
+      # between beats (see ENRICH_*_STALE_S in .env.example).
+      test: ["CMD", "python", "/app/healthcheck.py"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     environment:
       PG_HOST: postgres
       PG_PORT: "5432"
@@ -295,6 +356,25 @@ services:
       TIER2_HIGH_THREAT_SCORE: ${TIER2_HIGH_THREAT_SCORE:-60}
       ABUSEIPDB_DAILY_QUOTA: ${ABUSEIPDB_DAILY_QUOTA:-900}
       GREYNOISE_429_COOLDOWN: ${GREYNOISE_429_COOLDOWN:-21600}
+      FEED_STORE_CHUNK: ${FEED_STORE_CHUNK:-1000}
+      ENRICH_MAX_ATTEMPTS: ${ENRICH_MAX_ATTEMPTS:-5}
+      ENRICH_RECLAIM_IDLE_S: ${ENRICH_RECLAIM_IDLE_S:-300}
+      ENRICH_CONSUME_STALE_S: ${ENRICH_CONSUME_STALE_S:-300}
+      # No default here, unlike the threshold above: these two derive theirs
+      # from the refresh intervals they watch (interval * 2), so pinning a
+      # number in compose would silently break that link the moment someone
+      # changed FEED_REFRESH_HOURS. Blank means "use the derived default" —
+      # heartbeat.env_seconds() treats an empty value as unset.
+      ENRICH_REFRESH_STALE_S: ${ENRICH_REFRESH_STALE_S:-}
+      ENRICH_FEEDS_STALE_S: ${ENRICH_FEEDS_STALE_S:-}
+      HTTP_CONNECT_TIMEOUT_S: ${HTTP_CONNECT_TIMEOUT_S:-5}
+      HTTP_READ_TIMEOUT_S: ${HTTP_READ_TIMEOUT_S:-15}
+      BACKOFF_BASE_S: ${BACKOFF_BASE_S:-1}
+      BACKOFF_MAX_S: ${BACKOFF_MAX_S:-60}
+      REDIS_SOCKET_TIMEOUT_S: ${REDIS_SOCKET_TIMEOUT_S:-30}
+      REDIS_CONNECT_TIMEOUT_S: ${REDIS_CONNECT_TIMEOUT_S:-10}
+      PG_COMMAND_TIMEOUT_S: ${PG_COMMAND_TIMEOUT_S:-30}
+      PG_CONNECT_TIMEOUT_S: ${PG_CONNECT_TIMEOUT_S:-10}
     volumes:
       - geoip_data:/geoip                 # GeoLite2 .mmdb files (see enrichment/feeds.py)
     depends_on:
@@ -306,15 +386,37 @@ services:
         condition: service_started
     deploy:
       resources:
-        limits: { cpus: "0.5", memory: 512M }
+        # 768M, up from 512M. Steady state is ~122 MB, but the peak is during a
+        # feed refresh and that is what gets OOM-killed: the CrowdSec CAPI
+        # blocklist (~25k decisions) and ThreatFox's 7-day window are held as
+        # in-memory indexes, refresh() builds a full second copy before
+        # swapping, and the GeoLite2 archives are tens of MB each. The code now
+        # streams those downloads to disk and inserts in FEED_STORE_CHUNK
+        # batches, which removes the two largest spikes; this covers what
+        # remains — an index, its replacement, and two open .mmdb readers at
+        # once. An OOM here looks random precisely because it only happens on
+        # the refresh tick.
+        limits: { cpus: "0.5", memory: 768M }
     logging: *default-logging
 
   analytics:
     build: ./analytics
     restart: unless-stopped
     networks: [data_net]
+    user: "1000:1000"       # pinned; no sensorlogs group — reads no log volume
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp/health"]
+    healthcheck:
+      # The loosest of the three, and deliberately so: the status loop ticks
+      # once every STATUS_INTERVAL_SECONDS (300s), so its threshold is two
+      # intervals plus slack. The consume and flush loops are held to 120s
+      # inside the same check, so a wedged consumer is still caught quickly.
+      test: ["CMD", "python", "/app/healthcheck.py"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     environment:
       PG_HOST: postgres
       PG_PORT: "5432"
@@ -330,6 +432,20 @@ services:
       REPORT_CRON_HOUR: ${REPORT_CRON_HOUR:-6}
       CROWDSEC_LAPI_URL: http://crowdsec:8080
       CROWDSEC_BOUNCER_KEY: ${CROWDSEC_BOUNCER_KEY:-}
+      WINDOW_MAX_EVENTS: ${WINDOW_MAX_EVENTS:-500}
+      WINDOW_MAX_IPS: ${WINDOW_MAX_IPS:-5000}
+      PROFILE_MAX_IPS: ${PROFILE_MAX_IPS:-20000}
+      ANALYTICS_CONSUME_STALE_S: ${ANALYTICS_CONSUME_STALE_S:-120}
+      ANALYTICS_FLUSH_STALE_S: ${ANALYTICS_FLUSH_STALE_S:-120}
+      # Blank on purpose — derived from STATUS_INTERVAL_SECONDS (x2 + slack),
+      # so a compose-side number would go stale if that interval changed.
+      ANALYTICS_STATUS_STALE_S: ${ANALYTICS_STATUS_STALE_S:-}
+      BACKOFF_BASE_S: ${BACKOFF_BASE_S:-1}
+      BACKOFF_MAX_S: ${BACKOFF_MAX_S:-60}
+      REDIS_SOCKET_TIMEOUT_S: ${REDIS_SOCKET_TIMEOUT_S:-30}
+      REDIS_CONNECT_TIMEOUT_S: ${REDIS_CONNECT_TIMEOUT_S:-10}
+      PG_COMMAND_TIMEOUT_S: ${PG_COMMAND_TIMEOUT_S:-60}
+      PG_CONNECT_TIMEOUT_S: ${PG_CONNECT_TIMEOUT_S:-10}
     depends_on:
       postgres:
         condition: service_healthy
@@ -337,7 +453,14 @@ services:
         condition: service_healthy
     deploy:
       resources:
-        limits: { cpus: "0.5", memory: 512M }
+        # 640M, up from 512M. Steady state is ~30 MB, but the in-memory
+        # correlation state scales with concurrent attackers: a per-IP deque of
+        # events, each a kilobyte or so, for every source seen in the last five
+        # minutes. Both dimensions are now capped (WINDOW_MAX_EVENTS,
+        # WINDOW_MAX_IPS, PROFILE_MAX_IPS), which bounds the worst case at a few
+        # hundred MB instead of leaving it open-ended; this sits above that
+        # bound with room for the daily report queries.
+        limits: { cpus: "0.5", memory: 640M }
     logging: *default-logging
 
   # ─────────────────────────── API + UI + EDGE ────────────────────────────
@@ -345,6 +468,11 @@ services:
     build: ./api
     restart: unless-stopped
     networks: [data_net, frontend_net, ops_net]
+    # Same pinning as the pipeline: this container also mounts honeypot_logs
+    # read-only, so it needs the sensorlogs group to keep reading sensor logs
+    # whose mode does not happen to include world-read.
+    user: "1000:1000"
+    group_add: ["999"]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     environment:

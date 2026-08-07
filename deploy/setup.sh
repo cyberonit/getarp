@@ -324,7 +324,12 @@ ok "Bouncer registration helper written."
 # ═══════════════════════════════════════════════════════════════════════════
 # STEP 6b  Sensor log rotation (eve.json/fast.log grow unbounded otherwise)
 # ═══════════════════════════════════════════════════════════════════════════
+install -m 755 "$REPO_DIR/deploy/fix-log-perms.sh" /usr/local/bin/getarp-fix-log-perms
 install -m 755 "$REPO_DIR/deploy/rotate-logs.sh" /etc/cron.daily/getarp-logs
+# Once now, then on every rotation: the sensors and the consumers only agree on
+# who may read the log volume because of the shared group this sets up.
+bash /usr/local/bin/getarp-fix-log-perms || \
+    warn "Log volume permissions could not be normalized (is the stack up?)."
 ok "Daily log rotation installed (/etc/cron.daily/getarp-logs)."
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -162,6 +162,40 @@ make down         # stop the stack
 make clean        # DANGER: stop + delete all volumes (destroys data)
 ```
 
+## Liveness and restarts
+
+The three Python workers (`pipeline`, `enrichment`, `analytics`) each run several
+concurrent loops. A loop can wedge — a hung socket, a provider that accepts a
+connection and never answers — while the process stays alive and the container
+keeps looking fine. `make ps` would show it up, and ingest would simply have
+stopped.
+
+Each loop therefore touches a file under `/tmp/health` (a tmpfs) on every
+iteration, and two things read those files:
+
+- **The container `HEALTHCHECK`** runs `healthcheck.py`, which surfaces a stalled
+  loop as `(unhealthy)` in `make ps`, naming the loop. `docker inspect` keeps the
+  reason in `.State.Health.Log`.
+- **An in-process watchdog** exits the process once a beat goes stale, so
+  `restart: unless-stopped` replaces the container.
+
+The watchdog is what actually recovers a hang. Compose does **not** act on health
+status — the restart policy fires on process *exit* only, so an unhealthy
+container would otherwise sit there unhealthy indefinitely. A supervisor with the
+Docker socket mounted is ruled out by this project's security model, so the worker
+has to notice and die on its own.
+
+Beats are per-loop, not per-process: one shared beat would stay fresh while a
+single loop was wedged, which is exactly the case this catches. They are files
+rather than Redis keys so that a brief Redis outage — during which the workers are
+behaving correctly — cannot restart all three at once.
+
+Thresholds are per-loop and tunable (`*_STALE_S` in `.env.example`); the defaults
+allow for a full retry-and-backoff cycle, so a Postgres restart does not read as a
+hang. `heartbeat.py` and `retry.py` are duplicated across the three service
+directories on purpose — they are separate images with no shared base, the same
+constraint as the NUL sanitizers. Keep the copies in sync.
+
 ## Not production yet — known gaps
 
 This is a working PoC scaffold. Before production: HA Postgres + backups, a real secrets

@@ -16,7 +16,17 @@ import tempfile
 
 import httpx
 
-from base import Enrichment
+from base import Enrichment, http_timeout
+
+# Rows per INSERT batch when replacing a feed. The CrowdSec CAPI blocklist is
+# ~25k indicators and ThreatFox's 7-day window can be several times that;
+# binding the whole feed into one executemany holds a second full copy of it in
+# memory, on top of the in-memory index, inside a container whose limit has to
+# cover both. Chunking bounds the copy without giving up atomicity — the batches
+# all run inside one transaction.
+FEED_STORE_CHUNK = int(os.environ.get("FEED_STORE_CHUNK") or 1000)
+# Bytes per chunk when streaming a feed download to disk.
+DOWNLOAD_CHUNK = 64 * 1024
 
 _FEED_REGISTRY: dict[str, type["FeedProvider"]] = {}
 
@@ -47,23 +57,31 @@ class FeedProvider:
         raise NotImplementedError
 
 
-async def _store(pool, source: str, rows: list[tuple]):
+_STORE_SQL = """INSERT INTO feed_indicators (source, indicator, type, category, meta)
+                VALUES ($1,$2,$3,$4,$5)
+                ON CONFLICT (source, indicator) DO NOTHING"""
+
+
+async def _store(pool, source: str, rows):
     """Atomically replace a source's indicators.
-    rows: (indicator_ip, type, category, meta_dict)."""
-    records = []
-    for ind, typ, cat, meta in rows:
-        try:
-            records.append((source, ipaddress.ip_address(ind), typ, cat,
-                            json.dumps(meta, default=str)))
-        except ValueError:
-            continue
+    rows: an iterable of (indicator_ip, type, category, meta_dict) — an
+    iterable, not a list, so callers can stream a feed through in FEED_STORE_CHUNK
+    batches instead of materializing all of it at once."""
     async with pool.acquire() as con:
         async with con.transaction():
             await con.execute("DELETE FROM feed_indicators WHERE source=$1", source)
-            await con.executemany(
-                """INSERT INTO feed_indicators (source, indicator, type, category, meta)
-                   VALUES ($1,$2,$3,$4,$5)
-                   ON CONFLICT (source, indicator) DO NOTHING""", records)
+            batch = []
+            for ind, typ, cat, meta in rows:
+                try:
+                    batch.append((source, ipaddress.ip_address(ind), typ, cat,
+                                  json.dumps(meta, default=str)))
+                except ValueError:
+                    continue
+                if len(batch) >= FEED_STORE_CHUNK:
+                    await con.executemany(_STORE_SQL, batch)
+                    batch.clear()
+            if batch:
+                await con.executemany(_STORE_SQL, batch)
 
 
 async def _load_rows(pool, source: str) -> list:
@@ -91,7 +109,7 @@ class AbuseChFeodoFeed(FeedProvider):
 
     async def refresh(self, pool):
         try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
+            async with httpx.AsyncClient(timeout=http_timeout(30), follow_redirects=True) as c:
                 resp = await c.get(self.URL)
             resp.raise_for_status()
             ips = set()
@@ -101,7 +119,7 @@ class AbuseChFeodoFeed(FeedProvider):
                     ips.add(line.split()[0])
             if not ips:
                 raise ValueError("empty blocklist")
-            await _store(pool, self.name, [(ip, "ip", "feodo-c2", {}) for ip in ips])
+            await _store(pool, self.name, ((ip, "ip", "feodo-c2", {}) for ip in ips))
             self._ips = ips
             print(f"[feeds] {self.name}: refreshed {len(ips)} IPs", flush=True)
         except Exception as ex:
@@ -143,7 +161,7 @@ class AbuseChThreatFoxFeed(FeedProvider):
         if not key:
             return
         try:
-            async with httpx.AsyncClient(timeout=60) as c:
+            async with httpx.AsyncClient(timeout=http_timeout(60)) as c:
                 resp = await c.post(self.URL, headers={"Auth-Key": key},
                                     json={"query": "get_iocs", "days": 7})
             resp.raise_for_status()
@@ -159,8 +177,8 @@ class AbuseChThreatFoxFeed(FeedProvider):
                             "threat_type": ioc.get("threat_type"),
                             "confidence_level": ioc.get("confidence_level")}
             await _store(pool, self.name,
-                         [(ip, "ip", m.get("malware") or "threatfox-ioc", m)
-                          for ip, m in iocs.items()])
+                         ((ip, "ip", m.get("malware") or "threatfox-ioc", m)
+                          for ip, m in iocs.items()))
             self._iocs = iocs
             print(f"[feeds] {self.name}: refreshed {len(iocs)} IOCs", flush=True)
         except Exception as ex:
@@ -205,7 +223,7 @@ class CrowdSecLocalFeed(FeedProvider):
         if not self._key:
             return
         try:
-            async with httpx.AsyncClient(timeout=30) as c:
+            async with httpx.AsyncClient(timeout=http_timeout(30)) as c:
                 resp = await c.get(f"{self._lapi}/v1/decisions",
                                    headers={"X-Api-Key": self._key})
             resp.raise_for_status()
@@ -221,8 +239,8 @@ class CrowdSecLocalFeed(FeedProvider):
                 if org and org not in entry["origins"]:
                     entry["origins"].append(org)
             await _store(pool, self.name,
-                         [(ip, "ip", (m["scenarios"][0] if m["scenarios"] else "ban"), m)
-                          for ip, m in decisions.items()])
+                         ((ip, "ip", (m["scenarios"][0] if m["scenarios"] else "ban"), m)
+                          for ip, m in decisions.items()))
             self._decisions = decisions
             print(f"[feeds] {self.name}: refreshed {len(decisions)} decisions", flush=True)
         except Exception as ex:
@@ -287,11 +305,19 @@ class GeoLiteFeed(FeedProvider):
         for edition in self._EDITIONS:
             try:
                 url = self._DL_URL.format(edition=edition, key=key)
-                async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
-                    resp = await c.get(url)
-                resp.raise_for_status()
                 with tempfile.NamedTemporaryFile(suffix=".tar.gz") as tmp:
-                    tmp.write(resp.content)
+                    # Streamed to disk rather than through resp.content: the
+                    # City archive is tens of megabytes, and holding it whole
+                    # in RAM — while the previous readers are still open and a
+                    # feed index is resident — is the spike that makes this
+                    # worker's memory ceiling look random. Peak cost is now one
+                    # DOWNLOAD_CHUNK.
+                    async with httpx.AsyncClient(timeout=http_timeout(120),
+                                                 follow_redirects=True) as c:
+                        async with c.stream("GET", url) as resp:
+                            resp.raise_for_status()
+                            async for chunk in resp.aiter_bytes(DOWNLOAD_CHUNK):
+                                tmp.write(chunk)
                     tmp.flush()
                     with tarfile.open(tmp.name, "r:gz") as tar:
                         member = next(m for m in tar.getmembers()

@@ -3,7 +3,8 @@ import asyncio
 import os
 import time
 import httpx
-from base import Enrichment, EnrichmentProvider, _REGISTRY, register
+from base import (Enrichment, EnrichmentProvider, _REGISTRY, http_timeout,
+                  register)
 
 
 @register
@@ -28,7 +29,7 @@ class CrowdSecProvider(EnrichmentProvider):
             if time.time() - self._last_fetch < self._TTL:
                 return
             try:
-                async with httpx.AsyncClient(timeout=10) as c:
+                async with httpx.AsyncClient(timeout=http_timeout(10)) as c:
                     resp = await c.get(f"{self._lapi}/v1/decisions",
                                        headers={"X-Api-Key": self._key})
                 raw = resp.json() or []
@@ -48,7 +49,7 @@ class CrowdSecProvider(EnrichmentProvider):
         if not self._cti_key:
             return None
         try:
-            async with httpx.AsyncClient(timeout=10) as c:
+            async with httpx.AsyncClient(timeout=http_timeout(10)) as c:
                 resp = await c.get(
                     self._CTI_URL + ip,
                     headers={"x-api-key": self._cti_key})
@@ -171,7 +172,7 @@ class AbuseIPDBProvider(EnrichmentProvider):
             return e
 
         try:
-            async with httpx.AsyncClient(timeout=8) as c:
+            async with httpx.AsyncClient(timeout=http_timeout(8)) as c:
                 resp = await c.get(self.URL,
                                    headers={"Key": key, "Accept": "application/json"},
                                    params={"ipAddress": ip, "maxAgeInDays": 90})
@@ -253,7 +254,7 @@ class GreyNoiseProvider(EnrichmentProvider):
         key = self.settings.get("GREYNOISE_KEY")
         headers = {"key": key} if key else {}
         try:
-            async with httpx.AsyncClient(timeout=8) as c:
+            async with httpx.AsyncClient(timeout=http_timeout(8)) as c:
                 resp = await c.get(self.URL + ip, headers=headers)
             if resp.status_code == 429:
                 retry = int(resp.headers.get("Retry-After", 0)) or self._cooldown
@@ -355,7 +356,7 @@ class VirusTotalProvider(EnrichmentProvider):
                 await asyncio.sleep(self._MIN_REQUEST_INTERVAL - elapsed)
 
             try:
-                async with httpx.AsyncClient(timeout=10) as c:
+                async with httpx.AsyncClient(timeout=http_timeout(10)) as c:
                     resp = await c.get(self.URL + ip, headers={"x-apikey": key})
                 self._last_request = time.time()
                 self._daily_count += 1
@@ -437,7 +438,7 @@ class AbusechProvider(EnrichmentProvider):
             text = None
             for attempt in range(4):
                 try:
-                    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
+                    async with httpx.AsyncClient(timeout=http_timeout(30), follow_redirects=True) as c:
                         resp = await c.get(self._BLOCKLIST_URL)
                     if resp.status_code == 200 and resp.text.strip():
                         text = resp.text
@@ -467,7 +468,7 @@ class AbusechProvider(EnrichmentProvider):
             return e
         # fall through to ThreatFox API
         try:
-            async with httpx.AsyncClient(timeout=30) as c:
+            async with httpx.AsyncClient(timeout=http_timeout(30)) as c:
                 resp = await c.post(
                     self._THREATFOX_URL,
                     headers={"Auth-Key": self._key},

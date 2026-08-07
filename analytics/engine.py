@@ -12,9 +12,11 @@ Everything modular: detectors/profilers are loaded from config so you can add a
 "better correlation module" or an AI scorer without editing this file.
 """
 import asyncio
+import contextlib
 import html
 import json
 import os
+import signal
 import sys
 import time
 from collections import defaultdict, deque
@@ -27,6 +29,8 @@ import redis.asyncio as redis
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "correlation"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "behavioral"))
 
+import heartbeat
+import retry
 import scan_detector   # noqa: F401  registers
 import attack_detector  # noqa: F401  registers
 from base import load_detectors, Finding
@@ -38,6 +42,42 @@ CONSUMER = os.environ.get("HOSTNAME", "analytics-1")
 STATUS_CHANNEL = "status:live"
 WINDOW_KEEP_S = 300        # keep 5 min of per-IP events in memory
 PROFILE_FLUSH_S = 5        # batch profile writes instead of one per event
+
+# ───────────────────────── memory ceilings ─────────────────────────
+# The per-IP state below is the engine's memory profile, and both dimensions
+# used to be unbounded between garbage collections: any number of IPs, each
+# with a 2000-event deque. Events arrive off the stream with their raw payload
+# already stripped but a Suricata alert still runs to a kilobyte or so, which
+# put one busy scanner at ~2 MB and a few hundred concurrent sources well past
+# the container limit — and gc_state() only runs on the 5-minute status tick,
+# so a burst has five minutes to do damage.
+#
+# The caps trade analytic depth for a hard ceiling: 500 events is far more than
+# any detector's window (the widest is 60s of ports), and evicting the
+# least-recently-seen IP loses in-flight correlation for the quietest source
+# rather than the loudest.
+WINDOW_MAX_EVENTS = int(os.environ.get("WINDOW_MAX_EVENTS") or 500)
+WINDOW_MAX_IPS = int(os.environ.get("WINDOW_MAX_IPS") or 5000)
+PROFILE_MAX_IPS = int(os.environ.get("PROFILE_MAX_IPS") or 20000)
+
+REDIS_SOCKET_TIMEOUT_S = float(os.environ.get("REDIS_SOCKET_TIMEOUT_S") or 30.0)
+REDIS_CONNECT_TIMEOUT_S = float(os.environ.get("REDIS_CONNECT_TIMEOUT_S") or 10.0)
+PG_COMMAND_TIMEOUT_S = float(os.environ.get("PG_COMMAND_TIMEOUT_S") or 60.0)
+PG_CONNECT_TIMEOUT_S = float(os.environ.get("PG_CONNECT_TIMEOUT_S") or 10.0)
+
+# Liveness thresholds, one per concurrent loop — see heartbeat.py. The status
+# loop's threshold is necessarily the loosest of the three workers: it ticks
+# once every STATUS_INTERVAL_SECONDS (300 by default), so anything under two
+# intervals plus the time its queries take would restart a perfectly healthy
+# engine. The consume and flush loops iterate on the order of seconds and are
+# held to much tighter bounds.
+_STATUS_INTERVAL_S = float(os.environ.get("STATUS_INTERVAL_SECONDS") or 300)
+HEARTBEATS = {
+    "consume": heartbeat.env_seconds("ANALYTICS_CONSUME_STALE_S", 120),
+    "flush": heartbeat.env_seconds("ANALYTICS_FLUSH_STALE_S", 120),
+    "status": heartbeat.env_seconds("ANALYTICS_STATUS_STALE_S",
+                                    _STATUS_INTERVAL_S * 2 + 120),
+}
 
 # Classification severity, least to most severe. Persisted classifications only
 # ever escalate: in-memory profiles are lost on restart / after 24h idle, and a
@@ -58,7 +98,8 @@ class Engine:
         self.detectors = load_detectors(
             settings.get("ENABLED_DETECTORS", "scan,attack"), settings)
         self.profiler = BehavioralProfiler(settings)
-        self.windows: dict[str, deque] = defaultdict(lambda: deque(maxlen=2000))
+        self.windows: dict[str, deque] = defaultdict(
+            lambda: deque(maxlen=WINDOW_MAX_EVENTS))
         self.profiles: dict[str, dict] = defaultdict(dict)
         self._dirty: set[str] = set()   # IPs whose profile needs persisting
         print(f"[analytics] detectors = {[d.key for d in self.detectors]}", flush=True)
@@ -69,6 +110,11 @@ class Engine:
         if not ip:
             return
         ev["_recv"] = time.time()
+        if ip not in self.windows and len(self.windows) >= WINDOW_MAX_IPS:
+            # Over the cap between collections. Evict the least recently seen
+            # source rather than refusing the new one: the IP still being
+            # talked about is the one worth correlating.
+            self._evict_windows()
         win = self.windows[ip]
         win.append(ev)
         # trim old
@@ -86,8 +132,32 @@ class Engine:
 
         # behavioral profile — persisted in batches by flush_profiles_loop to
         # avoid two DB writes per event during brute-force floods
+        if ip not in self.profiles and len(self.profiles) >= PROFILE_MAX_IPS:
+            self._evict_profiles()
         self.profiler.update(self.profiles[ip], ev)
         self._dirty.add(ip)
+
+    def _evict_windows(self):
+        """Drop the coldest tenth of the correlation windows. Called when a
+        flood pushes the tracked-IP count past WINDOW_MAX_IPS between the
+        5-minute gc ticks; a tenth at a time keeps this from running on every
+        event once the cap is reached."""
+        by_age = sorted(self.windows.items(),
+                        key=lambda kv: kv[1][-1]["_recv"] if kv[1] else 0)
+        for ip, _win in by_age[:max(1, WINDOW_MAX_IPS // 10)]:
+            del self.windows[ip]
+
+    def _evict_profiles(self):
+        """Same idea for behavioural profiles, which are otherwise held for a
+        full 24h of inactivity. A profile evicted early is not lost work: it
+        has already been persisted by flush_profiles_loop, and persist_profile
+        merges rather than overwrites, so the row keeps accumulating if the IP
+        comes back."""
+        by_age = sorted(self.profiles.items(),
+                        key=lambda kv: kv[1].get("last", 0))
+        for ip, _prof in by_age[:max(1, PROFILE_MAX_IPS // 10)]:
+            del self.profiles[ip]
+            self._dirty.discard(ip)
 
     async def persist_finding(self, f: Finding):
         async with self.pool.acquire() as con:
@@ -165,28 +235,67 @@ class Engine:
     async def flush_profiles_loop(self):
         while True:
             await asyncio.sleep(PROFILE_FLUSH_S)
-            dirty, self._dirty = self._dirty, set()
-            for ip in dirty:
-                prof = self.profiles.get(ip)
-                if not prof:
-                    continue
-                try:
-                    await self.persist_profile(self.profiler.snapshot(ip, prof))
-                except Exception as e:
-                    print(f"[analytics] profile flush {ip}: "
-                          f"{str(e).replace(chr(10), ' ').replace(chr(13), '')}", flush=True)
-                    self._dirty.add(ip)   # retry on the next tick
+            heartbeat.beat("flush")
+            await self.flush_profiles()
+
+    async def flush_profiles(self):
+        dirty, self._dirty = self._dirty, set()
+        for ip in dirty:
+            prof = self.profiles.get(ip)
+            if not prof:
+                continue
+            try:
+                await self.persist_profile(self.profiler.snapshot(ip, prof))
+            except Exception as e:
+                print(f"[analytics] profile flush {ip}: {retry.oneline(e)}",
+                      flush=True)
+                # Only worth another go if the failure was the database being
+                # briefly unavailable; a rejected snapshot would fail the same
+                # way for ever and re-queueing it would pin the IP in memory.
+                if retry.is_transient(e):
+                    self._dirty.add(ip)
+            heartbeat.beat("flush")
 
     # ───────────────── consumer loop ─────────────────
-    async def consume(self):
+    async def ensure_group(self):
         try:
             await self.r.xgroup_create(EVENTS_STREAM, GROUP, id="$", mkstream=True)
         except redis.ResponseError as e:
             if "BUSYGROUP" not in str(e):
                 raise
+
+    async def consume(self, stop=None):
+        """Read the events stream forever.
+
+        The outer try is what keeps a Redis restart from ending the engine:
+        xreadgroup raising used to kill this coroutine, and the gather in main()
+        then took the process down with it. Per-event failures stay per-event —
+        one detector tripping over one malformed field must not cost the
+        remaining events in the batch.
+        """
+        await self.ensure_group()
+        attempt = 0
         while True:
-            resp = await self.r.xreadgroup(GROUP, CONSUMER, {EVENTS_STREAM: ">"},
-                                           count=100, block=2000)
+            if stop is not None and stop.is_set():
+                return
+            try:
+                resp = await self.r.xreadgroup(GROUP, CONSUMER,
+                                               {EVENTS_STREAM: ">"},
+                                               count=100, block=2000)
+            except Exception as e:
+                attempt += 1
+                heartbeat.beat("consume")
+                waited = await retry.sleep(attempt)
+                print(f"[analytics] stream read failed ({retry.oneline(e)}) — "
+                      f"reconnecting, attempt {attempt} in {waited:.1f}s",
+                      flush=True)
+                # The group goes with the stream if Redis is flushed or evicts
+                # it; without recreating it every later read fails identically.
+                with contextlib.suppress(Exception):
+                    await self.ensure_group()
+                continue
+            attempt = 0
+            heartbeat.beat("consume")
             if not resp:
                 continue
             for _stream, messages in resp:
@@ -194,19 +303,34 @@ class Engine:
                     try:
                         await self.handle_event(dict(fields))
                     except Exception as e:
-                        print(f"[analytics] handle: {e}", flush=True)
+                        print(f"[analytics] handle "
+                              f"[{fields.get('sensor')} {fields.get('src_ip')} "
+                              f"{fields.get('event_type')}]: {retry.oneline(e)}",
+                              flush=True)
                     finally:
-                        await self.r.xack(EVENTS_STREAM, GROUP, msg_id)
+                        # ACK regardless: analytics is a live view, and an event
+                        # that cannot be processed now will not process later
+                        # either — leaving it pending would just grow the list.
+                        with contextlib.suppress(Exception):
+                            await self.r.xack(EVENTS_STREAM, GROUP, msg_id)
+                heartbeat.beat("consume")
 
     # ───────────────── 5-minute status ─────────────────
     async def status_loop(self):
         interval = int(self.settings.get("STATUS_INTERVAL_SECONDS", 300))
         while True:
+            heartbeat.beat("status")
             try:
                 await self.snapshot_status()
             except Exception as e:
-                print(f"[analytics] status: {e}", flush=True)
-            self.gc_state()
+                print(f"[analytics] status: {retry.oneline(e)}", flush=True)
+            try:
+                self.gc_state()
+            except Exception as e:
+                # gc is bookkeeping; losing a pass costs memory, not data, and
+                # must never take the status loop with it.
+                print(f"[analytics] gc: {retry.oneline(e)}", flush=True)
+            heartbeat.beat("status")
             await asyncio.sleep(interval)
 
     # ───────────────── periodic memory cleanup ─────────────────
@@ -417,21 +541,96 @@ def _db_creds():
     return os.environ["PG_USER"], os.environ["PG_PASSWORD"]
 
 
-async def main():
+async def _connect_pool():
+    """Wait for Postgres rather than dying on it — a database restart must not
+    take the engine with it and leave the restart policy racing the same window
+    on the way back up."""
     user, password = _db_creds()
-    pool = await asyncpg.create_pool(
-        host=os.environ["PG_HOST"],
-        port=int(os.environ["PG_PORT"]),
-        database=os.environ["PG_DB"],
-        user=user,
-        password=password,
-        min_size=2, max_size=10,
+    attempt = 0
+    while True:
+        try:
+            return await asyncpg.create_pool(
+                host=os.environ["PG_HOST"],
+                port=int(os.environ["PG_PORT"]),
+                database=os.environ["PG_DB"],
+                user=user,
+                password=password,
+                min_size=2, max_size=10,
+                # The report and retention queries are the slowest in the
+                # system, hence the roomier default here — but unbounded is not
+                # an option: one wedged query holds its connection, and ten of
+                # them leave every acquire() waiting behind a process that
+                # still looks perfectly alive.
+                command_timeout=PG_COMMAND_TIMEOUT_S,
+                timeout=PG_CONNECT_TIMEOUT_S,
+            )
+        except Exception as ex:
+            attempt += 1
+            waited = await retry.sleep(attempt)
+            print(f"[analytics] postgres unavailable ({retry.oneline(ex)}) — "
+                  f"retry {attempt} in {waited:.1f}s", flush=True)
+
+
+def _redis_client():
+    """Redis with socket timeouts. The default client has none: against a peer
+    that is gone but whose TCP connection was never torn down, the blocking
+    XREADGROUP in consume() waits for ever — process alive, no CPU, no logs, no
+    restart. try/except cannot catch a call that never returns."""
+    return redis.from_url(
+        os.environ["REDIS_URL"], decode_responses=True,
+        # Must exceed the 2s XREADGROUP block, or every idle read is an error.
+        socket_timeout=REDIS_SOCKET_TIMEOUT_S,
+        socket_connect_timeout=REDIS_CONNECT_TIMEOUT_S,
+        socket_keepalive=True,
+        health_check_interval=30,
+        retry_on_timeout=True,
     )
-    r = redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
+
+
+async def main():
+    heartbeat.start(HEARTBEATS)
+    pool = await _connect_pool()
+    r = _redis_client()
     settings = await load_settings(pool)
     eng = Engine(pool, r, settings)
-    await asyncio.gather(eng.consume(), eng.flush_profiles_loop(), eng.status_loop(),
-                         eng.report_loop(), eng.retention_loop())
+
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        with contextlib.suppress(NotImplementedError):
+            loop.add_signal_handler(sig, stop.set)
+
+    consumer = asyncio.create_task(eng.consume(stop))
+    others = [asyncio.create_task(eng.flush_profiles_loop()),
+              asyncio.create_task(eng.status_loop()),
+              asyncio.create_task(eng.report_loop()),
+              asyncio.create_task(eng.retention_loop()),
+              asyncio.create_task(heartbeat.watchdog(HEARTBEATS))]
+
+    stopper = asyncio.create_task(stop.wait())
+    done, _ = await asyncio.wait([consumer, *others, stopper],
+                                 return_when=asyncio.FIRST_COMPLETED)
+    if stopper not in done:
+        for task in done:
+            if not task.cancelled() and task.exception():
+                print(f"[analytics] loop exited unexpectedly: "
+                      f"{retry.oneline(task.exception())}", flush=True)
+
+    print("[analytics] stopping — flushing profiles", flush=True)
+    with contextlib.suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(asyncio.shield(consumer), timeout=10)
+    for task in (consumer, *others, stopper):
+        task.cancel()
+    await asyncio.gather(consumer, *others, stopper, return_exceptions=True)
+    # Profiles are only written every PROFILE_FLUSH_S, so up to five seconds of
+    # accumulated sessions, commands and scores exist solely in memory at any
+    # moment. Persisting them here is the difference between a clean restart
+    # and one that quietly loses the last few seconds of every active attacker.
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(eng.flush_profiles(), timeout=15)
+    await pool.close()
+    await r.aclose()
+    print("[analytics] stopped", flush=True)
 
 
 if __name__ == "__main__":

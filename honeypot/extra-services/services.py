@@ -223,6 +223,12 @@ async def make_server(handler, port):
 
 
 async def main():
+    # 0664, not 0644, on any log file this process creates. The volume is
+    # shared with the rotation cron and read by the pipeline through the
+    # sensorlogs group; a file created without the group-write bit locks the
+    # rotator out of its own stream, which is how extra.json was silently lost
+    # once already.
+    os.umask(0o002)
     os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
     # Fail fast if the log file is not writable (e.g. stale file owned by a
     # different uid after an image upgrade). A silent PermissionError per
