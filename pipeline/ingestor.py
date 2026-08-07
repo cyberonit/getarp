@@ -22,6 +22,16 @@ import asyncpg
 import redis.asyncio as redis
 
 LOG_DIR = os.environ.get("LOG_DIR", "/data/logs")
+# Where per-file read offsets are persisted. The log volume is mounted
+# read-only (it is a one-way boundary), so checkpoints need their own writable
+# volume; see the pipeline service in docker-compose.yml.
+STATE_DIR = os.environ.get("STATE_DIR", "/var/lib/pipeline")
+# Bound on how much gets re-read after an unclean stop. A checkpoint is also
+# written whenever a tail catches up to the end of its file, so in steady state
+# (which is idle far more often than not) the real replay window is one line.
+CHECKPOINT_EVERY_LINES = int(os.environ.get("CHECKPOINT_EVERY_LINES", "1000"))
+# Namespace for deterministic event ids — see _event_id().
+_EVENT_NS = uuid.UUID("6f9619ff-8b86-d011-b42d-00c04fc964ff")
 # This sensor's own public IP(s), comma-separated. Suricata response-direction
 # rules ("ET SCAN ... attempt response" etc.) fire on the honeypot's own replies
 # with src_ip = this host and dst_port = the attacker's ephemeral port, which
@@ -154,25 +164,138 @@ def _svc_from_port(p):
 NORMALIZERS = {"cowrie": norm_cowrie, "suricata": norm_suricata, "extra": norm_extra}
 
 
+# ───────────────────────── read checkpoints ─────────────────────────
+# tail() used to seek to end-of-file on every start, so whatever a sensor wrote
+# while the pipeline was down was skipped — silently, with nothing recording
+# that a gap existed. Read positions are now persisted per file so a restart
+# resumes where it left off.
+#
+# Delivery is at-least-once, not exactly-once: a checkpoint records what has
+# been *read*, while the INSERT happens later in consumer(), so an unclean stop
+# re-reads a bounded tail of the file. That is safe because event ids are
+# derived from the record itself (see _event_id) and the insert is ON CONFLICT
+# DO NOTHING, so a replayed line collides with itself instead of duplicating.
+
+def _state_path(path: str) -> str:
+    return os.path.join(STATE_DIR, os.path.basename(path) + ".offset")
+
+
+def _load_checkpoint(path: str):
+    """Return (inode, offset), or None when there is nothing usable on disk."""
+    try:
+        with open(_state_path(path)) as fh:
+            st = json.load(fh)
+        return int(st["inode"]), int(st["offset"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _save_checkpoint(path: str, inode: int, offset: int) -> None:
+    """Persist the read position atomically. Never fatal: a lost checkpoint
+    costs a replay, but a raising tail would cost live traffic."""
+    target = _state_path(path)
+    tmp = target + ".tmp"
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(tmp, "w") as fh:
+            json.dump({"inode": inode, "offset": offset}, fh)
+        os.replace(tmp, target)
+    except OSError as ex:
+        print(f"[pipeline] checkpoint write failed for "
+              f"{os.path.basename(path)}: {ex}", flush=True)
+
+
+def _resume_position(path: str, fh, inode: int) -> None:
+    """Seek to wherever this file should be read from, and say out loud when a
+    gap is unavoidable rather than passing over it in silence.
+
+    Two cases genuinely lose records and both are logged: no checkpoint at all
+    (first ever start), and a checkpoint naming a file that has since rotated
+    away — the previous file is gzipped by the rotation cron and not re-read.
+    """
+    name = os.path.basename(path)
+    size = os.fstat(fh.fileno()).st_size
+    checkpoint = _load_checkpoint(path)
+
+    if checkpoint is None:
+        fh.seek(0, os.SEEK_END)
+        print(f"[pipeline] {name}: no checkpoint — starting at end of file; "
+              f"records written before now are NOT ingested", flush=True)
+        return
+
+    saved_inode, offset = checkpoint
+    if saved_inode != inode:
+        fh.seek(0)
+        print(f"[pipeline] {name}: rotated while down — resuming at the start "
+              f"of the new file; records written past offset {offset} of the "
+              f"previous file are NOT ingested", flush=True)
+        return
+    if offset > size:
+        fh.seek(0)
+        print(f"[pipeline] {name}: truncated while down (checkpoint {offset} > "
+              f"size {size}) — resuming from the start", flush=True)
+        return
+
+    fh.seek(offset)
+    if offset < size:
+        print(f"[pipeline] {name}: resuming at offset {offset}, "
+              f"{size - offset} bytes to catch up", flush=True)
+    else:
+        print(f"[pipeline] {name}: resuming at offset {offset}", flush=True)
+
+
 # ───────────────────────── file tailer ─────────────────────────
 async def tail(path: str, queue: asyncio.Queue, sensor: str):
-    """Follow a JSON-lines file, surviving rotation/truncation."""
+    """Follow a JSON-lines file, surviving rotation/truncation, resuming from
+    the persisted offset so a restart does not skip what arrived while down.
+
+    Opened in binary: fh.tell() is then a real byte offset that can be compared
+    against st_size and handed back to seek(), which a text-mode handle does not
+    guarantee. json.loads accepts bytes directly.
+    """
     while not os.path.exists(path):
         await asyncio.sleep(2)
-    inode = os.stat(path).st_ino
-    fh = open(path, "r")
+    fh = open(path, "rb")
+    inode = os.fstat(fh.fileno()).st_ino
+    unsaved = 0
+
+    def _parse(raw):
+        """Return the decoded record, or None when the line is not usable.
+        ValueError covers both JSONDecodeError and the UnicodeDecodeError a
+        partially-written or corrupt line can raise."""
+        stripped = raw.strip()
+        if not stripped:
+            return None
+        try:
+            return json.loads(stripped)
+        except ValueError:
+            return None
+
     try:
-        fh.seek(0, os.SEEK_END)  # start at tail; we want live traffic
+        _resume_position(path, fh, inode)
+        # Persist the starting position immediately. Without this a tail that
+        # never reads a line — the common case on a quiet sensor, and on every
+        # first start, where we deliberately begin at EOF — would leave nothing
+        # on disk, and the next start would take the "no checkpoint" branch and
+        # skip ahead all over again.
+        _save_checkpoint(path, inode, fh.tell())
         while True:
             line = fh.readline()
             if line:
-                line = line.strip()
-                if line:
-                    try:
-                        await queue.put((sensor, json.loads(line)))
-                    except json.JSONDecodeError:
-                        pass
+                record = _parse(line)
+                if record is not None:
+                    await queue.put((sensor, record))
+                unsaved += 1
+                if unsaved >= CHECKPOINT_EVERY_LINES:
+                    _save_checkpoint(path, inode, fh.tell())
+                    unsaved = 0
                 continue
+            # Caught up. This is where the tail spends most of its life, so it
+            # is both the cheapest and the most useful moment to record the
+            # position — in steady state the replay window is a single line.
+            if unsaved:
+                _save_checkpoint(path, inode, fh.tell())
+                unsaved = 0
             await asyncio.sleep(0.4)
             # detect rotation
             try:
@@ -183,26 +306,30 @@ async def tail(path: str, queue: asyncio.Queue, sensor: str):
                         line = fh.readline()
                         if not line:
                             break
-                        line = line.strip()
-                        if line:
-                            try:
-                                await queue.put((sensor, json.loads(line)))
-                            except json.JSONDecodeError:
-                                pass
+                        record = _parse(line)
+                        if record is not None:
+                            await queue.put((sensor, record))
                     fh.close()
                     # the new file may not exist yet right after rotation —
                     # wait for it instead of crashing on a closed handle
                     while not os.path.exists(path):
                         await asyncio.sleep(1)
-                    fh = open(path, "r")
+                    fh = open(path, "rb")
                     inode = os.fstat(fh.fileno()).st_ino
+                    # Record the new file at offset 0 immediately: a crash here
+                    # must not send the next start back to a checkpoint that
+                    # names the rotated-away inode.
+                    unsaved = 0
+                    _save_checkpoint(path, inode, fh.tell())
             except FileNotFoundError:
                 await asyncio.sleep(1)
                 if fh.closed:
                     while not os.path.exists(path):
                         await asyncio.sleep(1)
-                    fh = open(path, "r")
+                    fh = open(path, "rb")
                     inode = os.fstat(fh.fileno()).st_ino
+                    unsaved = 0
+                    _save_checkpoint(path, inode, fh.tell())
     finally:
         fh.close()
 
@@ -255,12 +382,29 @@ def _redact_raw(raw_dict):
     return scrubbed
 
 
+def _event_id(sensor: str, record: dict) -> str:
+    """Derive the event id from the record itself, so that re-reading a line
+    after an unclean restart yields the same id and the INSERT below collapses
+    the replay instead of writing the event a second time.
+
+    The consequence is that two byte-identical records from one sensor become a
+    single row. Real sensor output carries microsecond timestamps and session
+    ids, so distinct events do not collide; an exact duplicate is the same event
+    logged twice, which is what we want to drop anyway.
+    """
+    canonical = json.dumps(record, sort_keys=True, separators=(",", ":"),
+                           default=str)
+    return str(uuid.uuid5(_EVENT_NS, f"{sensor}\x1f{canonical}"))
+
+
 async def consumer(queue: asyncio.Queue, pool, r):
     while True:
         sensor, record = await queue.get()
         e = NORMALIZERS[sensor](record)
         if not e:
             continue
+        # Replaces the random id the normalizer defaulted to; see _event_id.
+        e["event_id"] = _event_id(sensor, record)
         # Before anything touches the DB or the bus, so every downstream
         # consumer sees the same storable payload.
         e = _strip_nulls(e)
@@ -277,17 +421,29 @@ async def consumer(queue: asyncio.Queue, pool, r):
         stored_raw = json.dumps(_redact_raw(e["raw"]), default=str)
         try:
             async with pool.acquire() as con:
-                await con.execute(
+                # ON CONFLICT DO NOTHING makes ingest idempotent: after an
+                # unclean stop the tail replays from its last checkpoint, and a
+                # replayed line carries the same derived event_id as the row
+                # already stored.
+                stored = await con.fetchrow(
                     """INSERT INTO events
                        (event_id, ts, sensor, service, event_type, src_ip, src_port,
                         dst_port, username, password, command, signature, severity,
                         session, raw)
-                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)""",
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+                       ON CONFLICT DO NOTHING
+                       RETURNING event_id""",
                     uuid.UUID(e["event_id"]), ts, e["sensor"], e["service"],
                     e["event_type"], e["src_ip"], e["src_port"], e["dst_port"],
                     e["username"], stored_password, e["command"], e["signature"],
                     e["severity"], e["session"], stored_raw,
                 )
+                if stored is None:
+                    # Already ingested. Skipping the rest matters as much as
+                    # skipping the insert: _upsert_ip increments event_count,
+                    # so replaying it would inflate per-IP counts and re-queue
+                    # enrichment for an IP that was already handled.
+                    continue
                 is_new = await _upsert_ip(con, e)
         except Exception as ex:
             # Include enough context to identify the offending stream without

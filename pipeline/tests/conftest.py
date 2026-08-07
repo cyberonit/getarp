@@ -43,8 +43,9 @@ def _reject_nuls(args):
 
 
 class _SpyCon:
-    def __init__(self, log):
+    def __init__(self, log, conflicts=()):
         self.log = log
+        self.conflicts = conflicts
 
     async def execute(self, sql, *args):
         _reject_nuls(args)
@@ -53,15 +54,21 @@ class _SpyCon:
     async def fetchrow(self, sql, *args):
         _reject_nuls(args)
         self.log.append(("fetchrow", sql, args))
+        # Postgres returns no row when ON CONFLICT DO NOTHING suppresses an
+        # insert. Without modelling that, a replayed record would look freshly
+        # stored and the double-count guard would never be exercised.
+        if any(marker in sql for marker in self.conflicts):
+            return None
         return {"inserted": True}
 
 
 class SpyPool:
-    def __init__(self):
+    def __init__(self, conflicts=()):
         self.log = []
+        self.conflicts = conflicts
 
     def acquire(self):
-        return _SpyAcquire(_SpyCon(self.log))
+        return _SpyAcquire(_SpyCon(self.log, self.conflicts))
 
 
 class _SpyAcquire:
@@ -85,20 +92,33 @@ def spy_redis():
     return SpyRedis()
 
 
+async def _run_consumer(pool, r, records):
+    """Run the real consumer loop over a list of (sensor, record) tuples."""
+    queue: asyncio.Queue = asyncio.Queue()
+    task = asyncio.get_event_loop().create_task(ingestor.consumer(queue, pool, r))
+    for item in records:
+        await queue.put(item)
+    while not queue.empty():
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.05)   # let the last dequeued record finish
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    return pool, r
+
+
 @pytest.fixture
 def drive_consumer(spy_pool, spy_redis):
-    """Run the real consumer loop over a list of (sensor, record) tuples."""
     async def _drive(records):
-        queue: asyncio.Queue = asyncio.Queue()
-        task = asyncio.get_event_loop().create_task(
-            ingestor.consumer(queue, spy_pool, spy_redis))
-        for item in records:
-            await queue.put(item)
-        while not queue.empty():
-            await asyncio.sleep(0.01)
-        await asyncio.sleep(0.05)   # let the last dequeued record finish
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-        return spy_pool, spy_redis
+        return await _run_consumer(spy_pool, spy_redis, records)
+    return _drive
+
+
+@pytest.fixture
+def drive_consumer_replayed(spy_redis):
+    """As drive_consumer, but the events insert reports a conflict — i.e. the
+    record was already stored and is being re-read after a restart."""
+    async def _drive(records):
+        pool = SpyPool(conflicts=("INSERT INTO events",))
+        return await _run_consumer(pool, spy_redis, records)
     return _drive
