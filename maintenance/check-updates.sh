@@ -3,7 +3,8 @@
 #
 # Stages:
 #   check   (default) dry-run — report outdated deps, change nothing
-#   apply   update requirements pins + npm packages, pull latest base images
+#   apply   update requirements pins + npm packages, pull latest base images,
+#           reclaim images/build cache older than 30 days
 #   commit  rebuild + deploy images (make up), refresh Suricata rules
 #           (make rules), then commit + push the dependency changes from
 #           the apply stage
@@ -183,6 +184,29 @@ else
     echo "  Run the apply stage to pull the latest Docker base images."
 fi
 
+# ── 4. Docker disk reclaim ────────────────────────────────────────────────────
+# Images and build cache are the largest single consumer of disk on this box —
+# larger than the database itself (measured 2026-08-07: 7.1 GB of reclaimable
+# images plus 2.5 GB of build cache, against a ~7.4 GB projected 1-year DB).
+# Every monthly rebuild orphans another layer set, so this needs to run on the
+# same cadence as the rebuild that creates the garbage.
+#
+# until=720h (30 days) deliberately keeps recent images so a rollback to last
+# month's build is still possible; anything older is assumed superseded.
+# Images backing running containers are never removed by prune. Volumes are
+# NEVER pruned here — they hold the database.
+hdr "Docker disk reclaim"
+if $APPLY; then
+    echo "Reclaiming images and build cache older than 30 days..."
+    docker image prune -af --filter "until=720h"   || warn "image prune failed"
+    docker builder prune -af --filter "until=720h" || warn "builder prune failed"
+    ok "Docker disk reclaimed"
+    docker system df
+else
+    docker system df
+    echo "  Run the apply stage to reclaim images/build cache older than 30 days."
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo
 echo "────────────────────────────────────────"
@@ -191,7 +215,7 @@ if $APPLY; then
     echo "  (rebuilds + deploys images, refreshes Suricata rules, commits + pushes pins)"
 else
     echo "Check stage complete. Next stages:"
-    echo "  bash maintenance/check-updates.sh apply    # update pins/npm, pull bases"
+    echo "  bash maintenance/check-updates.sh apply    # update pins/npm, pull bases, reclaim disk"
     echo "  bash maintenance/check-updates.sh commit   # make up, make rules, git commit+push"
 fi
 echo "────────────────────────────────────────"
