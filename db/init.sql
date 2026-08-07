@@ -55,6 +55,14 @@ CREATE TABLE ips (
 );
 CREATE INDEX idx_ips_first_seen ON ips (first_seen);
 CREATE INDEX idx_ips_last_seen  ON ips (last_seen);
+-- Update-heavy (one upsert per event) and on the retention_loop DELETE path.
+-- last_seen is indexed and changes on nearly every event, which blocks HOT
+-- updates and so leaves dead tuples in every index; vacuum needs to run far
+-- more often than the server default of 20% growth.
+ALTER TABLE ips SET (
+    autovacuum_vacuum_scale_factor = 0.02,
+    autovacuum_vacuum_threshold    = 5000
+);
 
 -- enrichment, keyed by IP, written by the swappable provider
 CREATE TABLE ip_enrichment (
@@ -69,6 +77,12 @@ CREATE TABLE ip_enrichment (
     is_known_attacker BOOLEAN,
     updated_at  TIMESTAMPTZ DEFAULT now(),
     raw         JSONB
+);
+-- Deletes from ips cascade here (~2.7 KB of TOASTed raw JSONB per row), on top
+-- of the enrichment worker's own refresh updates.
+ALTER TABLE ip_enrichment SET (
+    autovacuum_vacuum_scale_factor = 0.02,
+    autovacuum_vacuum_threshold    = 5000
 );
 
 -- Tier-1 threat-intel feeds, bulk-downloaded on a schedule by the enrichment
@@ -114,11 +128,17 @@ CREATE TABLE attack_events (
 );
 CREATE INDEX idx_attack_src ON attack_events (src_ip, ts DESC);
 CREATE INDEX idx_attack_ts  ON attack_events (ts DESC);
--- Append-heavy and the largest non-hypertable: keep planner stats fresh so joins
--- on it don't get bad row estimates. Re-analyze after ~2% change, vacuum at ~5%.
+-- The largest non-hypertable, and — unlike a hypertable, which expires data by
+-- dropping whole chunks — it sheds rows via the nightly DELETE in
+-- analytics/engine.py retention_loop. On the 1-year horizon that is a
+-- permanent ~17,400 rows/night once the first data ages out, so vacuum has to
+-- keep pace rather than batch up: trigger at ~1% + 10k rather than the ~5%
+-- that suited it while it was purely append-only.
+-- Re-analyze after ~2% change so joins don't get bad row estimates.
 ALTER TABLE attack_events SET (
     autovacuum_analyze_scale_factor = 0.02,
-    autovacuum_vacuum_scale_factor  = 0.05
+    autovacuum_vacuum_scale_factor  = 0.01,
+    autovacuum_vacuum_threshold     = 10000
 );
 
 -- per-IP behavioral profile (one row, upserted)
@@ -135,6 +155,11 @@ CREATE TABLE behavior_profiles (
     detail          JSONB
 );
 CREATE INDEX idx_behavior_threat_score ON behavior_profiles (threat_score DESC);
+-- Upserted per profiling pass and on the retention_loop DELETE path.
+ALTER TABLE behavior_profiles SET (
+    autovacuum_vacuum_scale_factor = 0.02,
+    autovacuum_vacuum_threshold    = 5000
+);
 
 -- 5-minute live status snapshots
 CREATE TABLE status_snapshots (
@@ -203,19 +228,18 @@ CREATE TABLE audit_log (
 CREATE INDEX idx_audit_ts ON audit_log (ts DESC);
 
 -- ─────────────── retention (tune for your legal/PII requirements) ───────────────
--- 3-year retention target; see docs/CAPACITY.md for the disk model.
--- Non-hypertables (scan_events, attack_events, ips, behavior_profiles, reports)
--- are cleaned by analytics/engine.py retention_loop with the same 3-year horizon.
-SELECT add_retention_policy('events', INTERVAL '3 years');
-SELECT add_retention_policy('status_snapshots', INTERVAL '3 years');
-
--- compress chunks older than 7 days (events are read-mostly past that point)
-ALTER TABLE events SET (
-    timescaledb.compress,
-    timescaledb.compress_segmentby = 'src_ip',
-    timescaledb.compress_orderby = 'ts DESC'
-);
-SELECT add_compression_policy('events', INTERVAL '7 days');
+-- 1-year horizon for raw, PII-bearing data; see docs/CAPACITY.md for the disk
+-- model. Non-hypertables (scan_events, attack_events, ips, behavior_profiles)
+-- are cleaned by analytics/engine.py retention_loop on the same horizon;
+-- `reports` holds only aggregate rollups and is kept longer (see engine.py).
+--
+-- The compression policy for `events` is declared next to the table itself
+-- (see "Columnar compression for aged chunks" above) — do NOT add a second
+-- add_compression_policy() here. A duplicate call with a different interval
+-- raises, and docker-entrypoint-initdb.d runs psql with ON_ERROR_STOP=1, so it
+-- would abort this script before the role/grant block below ever runs.
+SELECT add_retention_policy('events', INTERVAL '1 year');
+SELECT add_retention_policy('status_snapshots', INTERVAL '1 year');
 
 -- ─────────────── per-service least-privilege roles ───────────────
 -- Each backend service gets its own role with only the grants it needs.

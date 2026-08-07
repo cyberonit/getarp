@@ -283,9 +283,20 @@ class Engine:
         print(f"[analytics] status: {level} active={snap['active_attackers']}", flush=True)
 
     # ───────────────── retention cleanup for non-hypertables ─────────────────
-    # 3-year horizon, matching the hypertable retention policies in db/init.sql.
-    # Deleting from ips cascades to ip_enrichment (FK ON DELETE CASCADE).
-    RETENTION = "3 years"
+    # Two horizons, because the tables carry very different data.
+    #
+    # RAW_RETENTION covers everything holding third-party PII — attacker
+    # usernames, passwords and commands — and matches the 1-year hypertable
+    # retention policies in db/init.sql. Deleting from ips cascades to
+    # ip_enrichment (FK ON DELETE CASCADE).
+    #
+    # AGGREGATE_RETENTION covers `reports`, which holds only the daily rollups
+    # (no raw attacker input). At ~4.6 kB per report that is ~1.7 MB/year, so
+    # keeping analytical history well past the raw data costs effectively
+    # nothing and means shortening RAW_RETENTION is a pure privacy win rather
+    # than a trade against trend history.
+    RAW_RETENTION = "1 year"
+    AGGREGATE_RETENTION = "3 years"
 
     async def retention_loop(self):
         while True:
@@ -293,15 +304,15 @@ class Engine:
             try:
                 async with self.pool.acquire() as con:
                     await con.execute(
-                        f"DELETE FROM scan_events WHERE ts < now() - interval '{self.RETENTION}'")
+                        f"DELETE FROM scan_events WHERE ts < now() - interval '{self.RAW_RETENTION}'")
                     await con.execute(
-                        f"DELETE FROM attack_events WHERE ts < now() - interval '{self.RETENTION}'")
+                        f"DELETE FROM attack_events WHERE ts < now() - interval '{self.RAW_RETENTION}'")
                     await con.execute(
-                        f"DELETE FROM behavior_profiles WHERE updated_at < now() - interval '{self.RETENTION}'")
+                        f"DELETE FROM behavior_profiles WHERE updated_at < now() - interval '{self.RAW_RETENTION}'")
                     await con.execute(
-                        f"DELETE FROM ips WHERE last_seen < now() - interval '{self.RETENTION}'")
+                        f"DELETE FROM ips WHERE last_seen < now() - interval '{self.RAW_RETENTION}'")
                     await con.execute(
-                        f"DELETE FROM reports WHERE created_at < now() - interval '{self.RETENTION}'")
+                        f"DELETE FROM reports WHERE created_at < now() - interval '{self.AGGREGATE_RETENTION}'")
                 print("[analytics] retention cleanup done", flush=True)
             except Exception as e:
                 print(f"[analytics] retention: {e}", flush=True)
