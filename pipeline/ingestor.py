@@ -113,6 +113,27 @@ HEARTBEATS.update({
     f"consumer:{i}": heartbeat.env_seconds("PIPELINE_CONSUMER_STALE_S", 120)
     for i in range(CONSUMERS)})
 
+# Data freshness, which is a different question from liveness. The beats above
+# say the tail loop is running; they stay green on a source that has produced
+# nothing for a week, because polling an idle file IS the loop working
+# correctly. That is not hypothetical: cowrie.json stopped on 2026-08-08 and
+# extra.json on 2026-08-10, both from permission changes on the shared volume,
+# and the container reported healthy throughout — ten days of ingest lost with
+# no signal anywhere.
+#
+# These are deliberately NOT in HEARTBEATS, because the watchdog exits the
+# process on a stale beat and a restart cannot fix a file the sensor is failing
+# to write. It would crash-loop the pipeline while the actual fault sat on the
+# volume. A stale source is a HEALTHCHECK concern only — it shows up in
+# `docker ps` as unhealthy and stays there until someone looks.
+#
+# The threshold is generous by design: the quietest source averages a line a
+# minute, so hours of silence is already far outside normal, and a false
+# unhealthy is a worse outcome than a slow true one.
+SOURCE_FRESHNESS = {
+    f"data:{name}": heartbeat.env_seconds("PIPELINE_SOURCE_STALE_S", 6 * 3600)
+    for name in FILES}
+
 
 # ───────────────────────── normalizers ─────────────────────────
 def _base():
@@ -322,11 +343,12 @@ async def tail(path: str, queue: asyncio.Queue, sensor: str, beat: str = None):
     quietly stops producing events.
     """
     beat = beat or f"tail:{os.path.basename(path)}"
+    data_beat = f"data:{os.path.basename(path)}"
     attempt = 0
     while True:
         started = time.monotonic()
         try:
-            await _tail_once(path, queue, sensor, beat)
+            await _tail_once(path, queue, sensor, beat, data_beat)
         except asyncio.CancelledError:
             raise
         except Exception as ex:
@@ -341,7 +363,8 @@ async def tail(path: str, queue: asyncio.Queue, sensor: str, beat: str = None):
                   f"(attempt {attempt})", flush=True)
 
 
-async def _tail_once(path: str, queue: asyncio.Queue, sensor: str, beat: str):
+async def _tail_once(path: str, queue: asyncio.Queue, sensor: str, beat: str,
+                     data_beat: str):
     """Follow a JSON-lines file, surviving rotation/truncation, resuming from
     the persisted offset so a restart does not skip what arrived while down.
 
@@ -383,6 +406,10 @@ async def _tail_once(path: str, queue: asyncio.Queue, sensor: str, beat: str):
                 if record is not None:
                     await queue.put((sensor, record))
                 heartbeat.beat(beat)
+                # Beat on the raw line, not on a successfully parsed record: a
+                # sensor emitting lines we cannot parse is still a live sensor,
+                # and this beat only answers "is this file still growing".
+                heartbeat.beat(data_beat)
                 unsaved += 1
                 if unsaved >= CHECKPOINT_EVERY_LINES:
                     _save_checkpoint(path, inode, fh.tell())
@@ -408,6 +435,7 @@ async def _tail_once(path: str, queue: asyncio.Queue, sensor: str, beat: str):
                         record = _parse(line)
                         if record is not None:
                             await queue.put((sensor, record))
+                        heartbeat.beat(data_beat)
                     fh.close()
                     # the new file may not exist yet right after rotation —
                     # wait for it instead of crashing on a closed handle
@@ -718,7 +746,10 @@ def _redis_client():
 
 
 async def main():
-    heartbeat.start(HEARTBEATS)
+    # Seed the data beats too, so a source reads as fresh until its threshold
+    # has actually had time to elapse — otherwise every restart would report
+    # unhealthy for as long as it takes the quietest sensor to produce a line.
+    heartbeat.start({**HEARTBEATS, **SOURCE_FRESHNESS})
     _probe_state_dir()
     pool = await _connect_pool()
     r = _redis_client()

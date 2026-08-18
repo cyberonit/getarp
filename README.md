@@ -196,6 +196,21 @@ hang. `heartbeat.py` and `retry.py` are duplicated across the three service
 directories on purpose — they are separate images with no shared base, the same
 constraint as the NUL sanitizers. Keep the copies in sync.
 
+### A running loop is not a producing source
+
+Liveness answers "is this loop iterating", which is not the same question as "is
+this sensor still producing". A tail polling a file nothing writes to is a loop
+working *correctly*, so it beats — and in August 2026 the pipeline reported
+healthy for ten days while `cowrie.json` and `extra.json` sat frozen, both
+sensors having lost write access to the shared log volume.
+
+The pipeline therefore keeps a second, separate beat per source, refreshed only
+when a line is actually read, and `PIPELINE_SOURCE_STALE_S` (6h) turns a silent
+source into `(unhealthy)`. It is deliberately **not** wired to the watchdog: the
+cause of a silent source is outside the container, and restarting the pipeline
+would crash-loop it while the real fault sat on the volume. Surfacing it is the
+whole remedy. See `deploy/fix-log-perms.sh` for the volume-side half.
+
 ## Not production yet — known gaps
 
 This is a working PoC scaffold. Before production: HA Postgres + backups, a real secrets
