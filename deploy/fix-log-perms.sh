@@ -45,10 +45,7 @@ set -euo pipefail
 
 SENSOR_GID="${SENSOR_GID:-999}"
 
-# Which uid must own which live log. These are the uids the sensor images are
-# pinned to (honeypot/extra-services/Dockerfile pins 10001; the upstream cowrie
-# and suricata images pin 999 and 998) — that pinning is what makes naming them
-# here safe. Files not listed keep their owner and only have their group fixed.
+# Which sensor writes which live log:
 #
 #   cowrie.json, cowrie.log — Cowrie self-rotates, so it must own these.
 #   extra.json              — rotated by rotate-logs.sh, but services.py reopens
@@ -56,12 +53,27 @@ SENSOR_GID="${SENSOR_GID:-999}"
 #   eve.json, fast.log      — Suricata chowns these to its run-as user when it
 #                             reopens on SIGHUP, which is EPERM unless it
 #                             already owns them.
-declare -A LOG_OWNER=(
-    [cowrie.json]="${COWRIE_UID:-999}"
-    [cowrie.log]="${COWRIE_UID:-999}"
-    [extra.json]="${EXTRA_UID:-10001}"
-    [eve.json]="${SURICATA_UID:-998}"
-    [fast.log]="${SURICATA_UID:-998}"
+declare -A SERVICE_LOGS=(
+    [cowrie]="cowrie.json cowrie.log"
+    [extra-services]="extra.json"
+    [suricata]="eve.json fast.log"
+)
+
+# Last-resort defaults, used only when the real uid cannot be read from a
+# running container. These are what the images ship today; they are a floor to
+# fall back to, NOT the source of truth.
+declare -A UID_BUILTIN=(
+    [cowrie]=999
+    [extra-services]=10001
+    [suricata]=998
+)
+
+# Setting one of these pins that service and skips the container lookup — an
+# operator escape hatch, and what the tests use to stay hermetic.
+declare -A UID_PIN=(
+    [cowrie]="${COWRIE_UID:-}"
+    [extra-services]="${EXTRA_UID:-}"
+    [suricata]="${SURICATA_UID:-}"
 )
 
 # Both outages this volume has had stayed invisible for over a week, because the
@@ -73,6 +85,60 @@ warn() {
     if command -v logger >/dev/null; then
         logger -t getarp-logs -p daemon.warning "$*" || true
     fi
+}
+
+writer_uid() {
+    # writer_uid SERVICE — the uid the sensor is ACTUALLY running as, read from
+    # the host's view of its process, falling back to the pinned constant.
+    #
+    # Asking the container beats hardcoding, because the number is not ours to
+    # choose. Every sensor image declares its user by NAME, which Docker
+    # resolves through the image's own /etc/passwd at start; cowrie/cowrie is
+    # additionally an unpinned :latest tag that the monthly maintenance job
+    # pulls unattended. The uid has already moved once this way (998 -> 999 in
+    # a July 2026 pull) and locked Cowrie out of its own log for two weeks. A
+    # constant here would be re-asserted with total confidence against a
+    # writer that had moved out from under it, and the verification below —
+    # which compares files to this same table — would report success while the
+    # sensor was locked out.
+    #
+    # Read from /proc rather than `docker exec id`: the sensor images have no
+    # shell (cowrie has neither sh nor id), and this needs no exec privileges
+    # on the socket. The 4th field of Uid: is the fsuid, which is precisely
+    # what the kernel stamps on files the process creates.
+    local svc="$1" cid pid uid
+    local builtin="${UID_BUILTIN[$svc]}" pin="${UID_PIN[$svc]}"
+
+    if [[ -n "$pin" ]]; then
+        _usable_uid "$pin" && { echo "$pin"; return; }
+        warn "${svc^^}_UID=$pin is not a usable owner — falling back to $builtin"
+        echo "$builtin"; return
+    fi
+
+    command -v docker >/dev/null || { echo "$builtin"; return; }
+    cid=$(docker ps -q --filter "label=com.docker.compose.service=$svc" | head -1)
+    [[ -n "$cid" ]] || { echo "$builtin"; return; }
+    pid=$(docker inspect -f '{{.State.Pid}}' "$cid" 2>/dev/null) || true
+    [[ -n "$pid" && "$pid" != "0" && -r "/proc/$pid/status" ]] \
+        || { echo "$builtin"; return; }
+    uid=$(awk '/^Uid:/{print $5}' "/proc/$pid/status")
+    _usable_uid "$uid" || { echo "$builtin"; return; }
+
+    # Drift is worth saying out loud even though it is handled: it means an
+    # image changed its identity, which is the event that has broken this
+    # volume twice.
+    [[ "$uid" != "$builtin" ]] && \
+        warn "$svc runs as uid $uid, not the expected $builtin — image identity changed; using $uid"
+    echo "$uid"
+}
+
+_usable_uid() {
+    # Numeric and not root. Root is rejected from BOTH the derived and the
+    # pinned path: Suricata is root for the first moments of its life, so a
+    # lookup can legitimately catch it at 0, and chowning its logs to root
+    # would lock it out the instant it drops privileges. There is no case where
+    # root is the right owner of a sensor log.
+    [[ "$1" =~ ^[0-9]+$ && "$1" != "0" ]]
 }
 
 # HONEYPOT_LOG_DIR bypasses the volume lookup. It exists so this can be
@@ -87,6 +153,17 @@ if [[ -z "$DIR" ]]; then
     DIR=$(docker volume inspect -f '{{.Mountpoint}}' "$VOL")
 fi
 [[ -d "$DIR" ]] || exit 0
+
+# Resolve each writer once, then key by filename for the passes below. Done
+# here, after DIR, so a run that exits early for want of a volume never bothers
+# inspecting containers.
+declare -A LOG_OWNER=()
+for svc in "${!SERVICE_LOGS[@]}"; do
+    svc_uid=$(writer_uid "$svc")
+    for log in ${SERVICE_LOGS[$svc]}; do
+        LOG_OWNER[$log]="$svc_uid"
+    done
+done
 
 # 3777 = setgid + sticky + rwxrwxrwx. The setgid bit is the point of this
 # script; the world-write bit is inherited from the previous 1777 and has to

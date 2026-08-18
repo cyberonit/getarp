@@ -184,6 +184,96 @@ else
     echo "  Run the apply stage to pull the latest Docker base images."
 fi
 
+# ── 3b. Sensor identity (uid drift across a pull) ─────────────────────────────
+# The sensor images declare their user by NAME, which Docker resolves through
+# the image's own /etc/passwd at start. cowrie/cowrie is additionally an
+# unpinned :latest tag — no versioned tags exist upstream — so this stage can
+# change the numeric uid a sensor runs as, unattended, on the monthly cron.
+#
+# That has happened: a July 2026 pull moved Cowrie 998 -> 999 and locked it out
+# of its own log on the shared honeypot_logs volume for two weeks, silently.
+# deploy/fix-log-perms.sh now derives the uid from the running container rather
+# than trusting a constant, so a drift is *survived* — but it is still worth
+# announcing, because it changes on-disk ownership across the whole volume and
+# is invisible in the compose file.
+#
+# Reads /etc/passwd out of the image without running it: `docker create` makes
+# a container without starting it, and `docker cp` streams the file out. The
+# sensor images ship no shell (cowrie has neither sh nor id), so exec is not an
+# option here.
+image_user_uid() {
+    # image_user_uid IMAGE — numeric uid the image's declared USER resolves to.
+    local image="$1" user cid uid
+    user=$(docker image inspect -f '{{.Config.User}}' "$image" 2>/dev/null) || return 1
+    user="${user%%:*}"
+    [[ -n "$user" ]] || { echo 0; return 0; }          # no USER directive -> root
+    [[ "$user" =~ ^[0-9]+$ ]] && { echo "$user"; return 0; }   # already numeric
+    cid=$(docker create "$image" 2>/dev/null) || return 1
+    uid=$(docker cp "$cid:/etc/passwd" - 2>/dev/null \
+          | tar -xO 2>/dev/null \
+          | awk -F: -v u="$user" '$1==u {print $3; exit}')
+    docker rm -f "$cid" >/dev/null 2>&1 || true
+    [[ -n "$uid" ]] || return 1
+    echo "$uid"
+}
+
+running_uid() {
+    # running_uid SERVICE — uid the container is actually running as right now.
+    # 4th field of Uid: is the fsuid, which is what the kernel stamps on files.
+    local svc="$1" cid pid
+    cid=$(docker ps -q --filter "label=com.docker.compose.service=$svc" | head -1)
+    [[ -n "$cid" ]] || return 1
+    pid=$(docker inspect -f '{{.State.Pid}}' "$cid" 2>/dev/null) || return 1
+    [[ -n "$pid" && "$pid" != "0" && -r "/proc/$pid/status" ]] || return 1
+    awk '/^Uid:/{print $5; exit}' "/proc/$pid/status"
+}
+
+hdr "Sensor identity (uid drift)"
+SENSOR_DRIFT=false
+for svc in cowrie suricata extra-services; do
+    # The image REFERENCE the service was started from (e.g. cowrie/cowrie:latest),
+    # not the image ID it happens to be running. Resolving that reference now
+    # picks up whatever the pull above just fetched, which is the comparison
+    # that matters: what the container is versus what the next deploy gives it.
+    cid=$(docker ps -q --filter "label=com.docker.compose.service=$svc" | head -1)
+    if [[ -z "$cid" ]]; then
+        info "$svc: not running, skipped"
+        continue
+    fi
+    img=$(docker inspect -f '{{.Config.Image}}' "$cid" 2>/dev/null) || img=""
+    if [[ -z "$img" ]]; then
+        info "$svc: image not resolvable, skipped"
+        continue
+    fi
+    want=$(image_user_uid "$img" 2>/dev/null) || want=""
+    have=$(running_uid "$svc" 2>/dev/null) || have=""
+    if [[ -z "$want" || -z "$have" ]]; then
+        info "$svc: could not determine uid (image=${want:-?} running=${have:-?})"
+    elif [[ "$want" == "0" ]]; then
+        # The image declares no USER (or declares root), so it tells us nothing
+        # about the runtime identity: the process drops privileges itself after
+        # start. Suricata does exactly this — it launches as root and becomes
+        # its --user, so "image says 0, running as 998" is the healthy steady
+        # state, not drift. Nothing to compare against; just report it.
+        info "$svc: image declares no user, drops privileges at runtime (now $have)"
+    elif [[ "$want" == "$have" ]]; then
+        ok "$svc runs as uid $have, image agrees"
+    else
+        SENSOR_DRIFT=true
+        warn "$svc UID DRIFT: running as $have, image $img resolves to $want"
+    fi
+done
+if $SENSOR_DRIFT; then
+    echo
+    info "The next deploy will move a sensor to a different uid. Ownership on the"
+    info "honeypot_logs volume follows the writer automatically (fix-log-perms.sh"
+    info "derives it), but run it right after 'make up' to converge immediately:"
+    info "  bash /usr/local/bin/getarp-fix-log-perms"
+    info "Then confirm ingest with a per-sensor count, not a total:"
+    info "  SELECT sensor, count(*), max(ts) FROM events"
+    info "  WHERE ts > now() - interval '10 minutes' GROUP BY 1;"
+fi
+
 # ── 4. Docker disk reclaim ────────────────────────────────────────────────────
 # Images and build cache are the largest single consumer of disk on this box —
 # larger than the database itself (measured 2026-08-07: 7.1 GB of reclaimable
