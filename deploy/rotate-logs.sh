@@ -39,6 +39,13 @@ warn() {
     fi
 }
 
+# An abort partway through this script is invisible: cron has no MTA, so
+# run-parts discards the shell's error message, and the only other symptom is
+# work that silently did not happen — a truncate that failed under set -e once
+# cost 27 h of Suricata ingest before anyone looked. Say where we died, in the
+# one place that is retained.
+trap 'warn "rotation aborted at line $LINENO (exit $?) — rotation may be half done"' ERR
+
 command -v docker >/dev/null || exit 0
 VOL=$(docker volume ls -q --filter name=honeypot_logs | head -1)
 [[ -n "$VOL" ]] || exit 0
@@ -109,7 +116,18 @@ copytruncate() {
     target="$f.$STAMP"
     [[ -e "$target" || -e "$target.gz" ]] && target="$f.$STAMP-$(date +%H%M%S)"
     cp -p "$f" "$target" || { warn "could not copy $1 aside; not truncating"; return 0; }
-    : > "$f"
+    # truncate WITHOUT O_CREAT. This directory is world-writable and sticky, and
+    # fs.protected_regular=2 makes the kernel refuse an O_CREAT open of a file
+    # owned by neither the directory owner nor the caller — root included, with
+    # no capability override and no way to ask for one. `: > "$f"` is exactly
+    # that open, so from 2026-08-19 (the first pass after per-writer ownership
+    # landed and made cowrie.log uid 999 in a directory owned by Suricata's 998)
+    # it failed with EACCES and, under set -e, took the whole rest of the pass
+    # with it: no SIGHUP, so Suricata wrote to the renamed eve.json inode for
+    # 27 h while the pipeline tailed an empty file, and no compression or
+    # pruning either. truncate -c opens an existing file without O_CREAT, which
+    # the check does not apply to.
+    truncate -c -s 0 "$f" || warn "could not truncate $1"
 }
 
 rotate eve.json
