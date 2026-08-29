@@ -210,6 +210,11 @@ services:
     #
     # max_worker_processes must cover timescaledb.max_background_workers +
     # max_parallel_workers + a few spare, hence 8 + 2 + 3.
+    #
+    # telemetry_level=off: the Telemetry Reporter job phones home to Timescale,
+    # which the egress rules block — it had failed 95 times with no successful
+    # run since this deployment began. Set here rather than via ALTER SYSTEM so
+    # it belongs to the repo, not to whichever pgdata volume is mounted.
     command: >-
       postgres
       -c shared_buffers=2GB
@@ -219,6 +224,7 @@ services:
       -c max_connections=50
       -c max_worker_processes=13
       -c timescaledb.max_background_workers=8
+      -c timescaledb.telemetry_level=off
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
