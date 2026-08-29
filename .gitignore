@@ -1,4 +1,6 @@
+# .env and its timestamped backups — same secrets; this repo is public
 .env
+.env.bak.*
 **/node_modules/
 **/dist/
 **/__pycache__/
