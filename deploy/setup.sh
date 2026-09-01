@@ -354,12 +354,70 @@ touch "$REPO_DIR/ids/suricata/rules/suricata.rules"
 # as HOME_NET) but docker-compose bind-mounts it — generate it from the tracked
 # example; never overwrite an existing (possibly hand-tuned) file.
 SURICATA_YAML="$REPO_DIR/ids/suricata/suricata.yaml"
+SURICATA_YAML_EXAMPLE="$REPO_DIR/ids/suricata/suricata.yaml.example"
+
+# Settings only: drop blank lines, whole-line comments and trailing comments (a
+# '#' must be preceded by whitespace, so one inside a quoted value survives).
+# The two files legitimately differ in prose — the template's HOME_NET carries
+# a "replaced by deploy/setup.sh" note the generated file does not — and a
+# check that cries wolf on every run is a check nobody reads.
+suricata_settings() {
+    sed -e 's/[[:space:]]\+#.*$//' -e 's/[[:space:]]\+$//' \
+        -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' "$1"
+}
+
 if [[ ! -f "$SURICATA_YAML" ]]; then
     sed "s/__SENSOR_PUBLIC_IP__/$SENSOR_PUBLIC_IP/" \
-        "$REPO_DIR/ids/suricata/suricata.yaml.example" > "$SURICATA_YAML"
+        "$SURICATA_YAML_EXAMPLE" > "$SURICATA_YAML"
     ok "Suricata config written with HOME_NET $SENSOR_PUBLIC_IP."
 else
     ok "Suricata config already present — left untouched."
+
+    # "Left untouched" is precisely how a fix to the template fails to reach a
+    # running sensor: this file is gitignored, so `git pull` updates only the
+    # example and a box deployed before the change keeps the old settings for
+    # ever. Not hypothetical — c5c8714 moved default-log-dir off
+    # /var/log/suricata, and a host that never notices keeps breaking Cowrie
+    # and extra-services on every Suricata start. Report drift, never
+    # overwrite: this file is hand-tuned per sensor.
+    _rendered="$(mktemp)"
+    sed "s/__SENSOR_PUBLIC_IP__/$SENSOR_PUBLIC_IP/" \
+        "$SURICATA_YAML_EXAMPLE" > "$_rendered"
+    if diff -q <(suricata_settings "$_rendered") \
+               <(suricata_settings "$SURICATA_YAML") >/dev/null 2>&1; then
+        ok "Suricata config is in sync with the tracked template."
+    else
+        warn "ids/suricata/suricata.yaml has drifted from suricata.yaml.example:"
+        # `|| true`: diff exits 1 when files differ, and with `set -eo pipefail`
+        # that would abort setup on the very path this check exists to report.
+        { diff -u <(suricata_settings "$_rendered") \
+                  <(suricata_settings "$SURICATA_YAML") \
+            | tail -n +3 | sed 's/^/      /'; } || true
+        info "'-' lines are the tracked template, '+' lines are this host."
+        info "Deliberate local tuning is fine; reconcile anything else."
+    fi
+    rm -f "$_rendered"
+fi
+
+# Load-bearing invariant, checked directly rather than left to the diff above —
+# it must hold even on a freshly generated file, and it is the one difference
+# that silently destroys data. The image entrypoint runs
+# `chown -R suricata:suricata /var/log/suricata`, and that path is the SHARED
+# honeypot_logs volume: pointing Suricata's logs there rewrites every sensor's
+# log to Suricata's uid on each start and kills Cowrie and extra-services
+# logging with no error anywhere (2026-09-01, ~2 h of ingest lost; c5c8714).
+_logdir=$(awk '/^default-log-dir:/{print $2; exit}' "$SURICATA_YAML")
+_evefile=$(awk '/filename:.*eve\.json/{print $2; exit}' "$SURICATA_YAML")
+if [[ "$_logdir" == /var/log/suricata* || "$_evefile" == /var/log/suricata* ]]; then
+    warn "Suricata is configured to write logs under /var/log/suricata:"
+    warn "    default-log-dir:  ${_logdir:-<unset>}"
+    warn "    eve-log filename: ${_evefile:-<unset>}"
+    warn "  That path is recursively chowned by the image entrypoint and is the"
+    warn "  shared honeypot_logs volume — this WILL silently break Cowrie and"
+    warn "  extra-services logging on every Suricata start."
+    warn "  Set both to /var/log/honeypot (matching the compose mount)."
+else
+    ok "Suricata log paths are clear of the entrypoint's recursive chown."
 fi
 
 # crowdsec/whitelists.yaml is gitignored (it contains the operator's IP) but
