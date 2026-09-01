@@ -36,6 +36,21 @@ warn() { echo -e "${YELLOW}[OUT]${NC}   $*"; }
 info() { echo -e "        $*"; }
 hdr()  { echo -e "\n==> $*"; }
 
+# Suricata's entrypoint chowns the shared honeypot_logs volume to its own
+# uid:gid on every start. PGID=999 in compose preserves the group; this puts
+# the per-writer owners back. Non-fatal -- it must not abort maintenance.
+normalize_log_perms() {
+    local fp
+    for fp in /usr/local/bin/getarp-fix-log-perms "$ROOT/deploy/fix-log-perms.sh"; do
+        # -r, not -x: we invoke via `bash "$fp"`, and the in-repo copy is
+        # not executable (only the /usr/local/bin install is).
+        [[ -r "$fp" ]] || continue
+        bash "$fp" || warn "log permission normalization failed ($fp)"
+        return 0
+    done
+    warn "fix-log-perms.sh not found -- honeypot_logs permissions NOT normalized"
+}
+
 update_suricata_rules() {
     hdr "Suricata IDS rules (make rules)"
     if ! docker compose ps --status running suricata 2>/dev/null | grep -q suricata; then
@@ -52,6 +67,7 @@ update_suricata_rules() {
     # --no-reload: the unix-command socket is disabled, we restart instead.
     if docker compose exec -T suricata suricata-update -o /etc/suricata/rules --no-reload; then
         docker compose restart suricata
+        normalize_log_perms
         ok "Suricata rules updated and service restarted"
     else
         warn "suricata-update failed — see errors above; rules NOT updated"

@@ -118,12 +118,23 @@ services:
     cap_add: [NET_ADMIN, NET_RAW, SYS_NICE]
     security_opt: ["no-new-privileges:true"]
     command: -i ${PUBLIC_IFACE} --set sensor-name=getarp
+    environment:
+      # Defence in depth. The shared volume is no longer mounted under
+      # /var/log/suricata, so the entrypoint's recursive chown can't reach it;
+      # this additionally makes Suricata's primary group the shared one, so
+      # any file it does create on that volume lands 998:999 rather than
+      # 998:998 even if the setgid bit is ever lost.
+      # Must match SENSOR_GID in deploy/fix-log-perms.sh.
+      PGID: 999
     volumes:
       # not :ro — the official entrypoint chowns these to the suricata user on
       # startup (set -e), so a read-only mount makes the container crash-loop
       - ./ids/suricata/suricata.yaml:/etc/suricata/suricata.yaml
       - ./ids/suricata/rules:/etc/suricata/rules
-      - honeypot_logs:/var/log/suricata
+      # /var/log/honeypot, NOT /var/log/suricata — the entrypoint recursively
+      # chowns the latter, and this is the volume the other sensors write.
+      # Must match default-log-dir in ids/suricata/suricata.yaml.
+      - honeypot_logs:/var/log/honeypot
     deploy:
       resources:
         # sized for a 4 vCPU / 8 GB VM; detect.profile=low + 2 af-packet

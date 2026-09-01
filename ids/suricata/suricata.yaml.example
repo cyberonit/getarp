@@ -32,7 +32,13 @@ vars:
     VXLAN_PORTS: 4789
     TEREDO_PORTS: 3544
 
-default-log-dir: /var/log/suricata
+# NOT /var/log/suricata: the image's entrypoint runs
+# `chown -R suricata:suricata /var/log/suricata`, and this dir is the SHARED
+# honeypot_logs volume that Cowrie and extra-services also write. Mounting it
+# there took every sensor's log to 998:998 on every Suricata start and locked
+# the other two out of their own logs (2026-09-01, ~2 h of ingest lost).
+# /var/log/honeypot is the path every other consumer already uses.
+default-log-dir: /var/log/honeypot
 
 # ───────────────────────── capture ─────────────────────────
 af-packet:
@@ -47,7 +53,7 @@ outputs:
   - eve-log:
       enabled: yes
       filetype: regular
-      filename: /var/log/suricata/eve.json
+      filename: /var/log/honeypot/eve.json
       types:
         - alert:
             payload: yes

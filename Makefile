@@ -28,6 +28,12 @@ setup:
 
 up:
 	docker compose up -d --build
+	@# PGID above keeps the group right, but the chown still resets each log's
+	@# OWNER to 998. The sticky bit checks uid alone, so Cowrie's midnight
+	@# rename() fails EPERM and its JSON logging dies (2026-08-08). Idempotent.
+	-@bash /usr/local/bin/getarp-fix-log-perms 2>/dev/null \
+	  || bash deploy/fix-log-perms.sh 2>/dev/null \
+	  || echo "  (skipped log-perm normalization -- needs root)"
 
 down:
 	docker compose down
