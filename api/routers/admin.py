@@ -25,7 +25,14 @@ _INT_SETTINGS = {
 _STR_SETTINGS = {"enrichment_provider", "enabled_detectors"}
 ALLOWED_SETTINGS = _INT_SETTINGS | _STR_SETTINGS
 
-VALID_PROVIDERS = {"crowdsec", "abuseipdb", "greynoise", "virustotal", "abusech", "multi"}
+# KEEP IN SYNC with the @register'd provider classes in enrichment/providers.py
+# (the worker resolves this value through base.get_provider and fails to start
+# on one it doesn't know). "tiered" belongs here even though nothing selects it
+# by hand: it is the shipped default in db/init.sql, so leaving it out made the
+# default a value the API rejected — re-saving the current setting 400'd, and
+# switching away from it was one-way.
+VALID_PROVIDERS = {"tiered", "crowdsec", "abuseipdb", "greynoise", "virustotal",
+                   "abusech", "multi"}
 # Detector registry keys — keep in sync with the @register'd Detector classes
 # in analytics/correlation/. Unknown keys are silently skipped by the engine,
 # so a typo here would disable detection without any error.

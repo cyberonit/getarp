@@ -122,10 +122,15 @@ ask_optional VIRUSTOTAL_KEY   "VirusTotal API key"
 echo "  MaxMind GeoLite2: https://www.maxmind.com/en/geolite2/signup (free; fills country/ASN for every IP)"
 ask_optional MAXMIND_LICENSE_KEY "MaxMind license key"
 
-ENRICHMENT_PROVIDER="crowdsec"
-[[ -z "$CROWDSEC_CTI_KEY" && -n "$ABUSEIPDB_KEY" ]] && ENRICHMENT_PROVIDER="abuseipdb"
-[[ -n "$GREYNOISE_KEY" && -z "$CROWDSEC_CTI_KEY" && -z "$ABUSEIPDB_KEY" ]] && ENRICHMENT_PROVIDER="greynoise"
-[[ -n "$VIRUSTOTAL_KEY" && -z "$CROWDSEC_CTI_KEY" && -z "$ABUSEIPDB_KEY" && -z "$GREYNOISE_KEY" ]] && ENRICHMENT_PROVIDER="virustotal"
+# Always "tiered", whichever keys were supplied above — it consumes all of them
+# and gates the metered ones behind its activity thresholds, and it works with
+# no keys at all (Feodo Tracker needs none, crowdsec-lapi uses the bouncer key
+# this script registers later). The cascade that used to pick a single-provider
+# mode from whichever key you happened to enter sent every fresh install to an
+# unmetered provider, which is exactly what the tiering exists to avoid; it also
+# disagreed with the db/init.sql default, so a new box booted on "crowdsec" from
+# .env while the settings table said "tiered".
+ENRICHMENT_PROVIDER="tiered"
 
 echo ""
 ok "All input collected."

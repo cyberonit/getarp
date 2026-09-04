@@ -104,8 +104,10 @@ Each IP's `ip_enrichment.raw` records which tiers ran and why (`raw->'tiered'`).
 
 ## Swapping the intelligence provider
 
-The enrichment provider is set during `setup.sh` based on which API key you supply.
-To change it at runtime via the admin Settings tab, or by editing `.env`:
+`setup.sh` always installs `tiered` — it uses every key you supplied and needs
+none of them. Pick a single-provider mode only to isolate one source for
+debugging or comparison — change it at runtime from the admin Settings tab, or
+by editing `.env`:
 
 ```bash
 ENRICHMENT_PROVIDER=tiered         # recommended: local feeds + gated APIs (see above)
