@@ -35,6 +35,41 @@ bash maintenance/check-updates.sh commit   # make up, make rules, then git commi
 
 > Suricata rules can also be updated independently with `make rules`.
 
+## backfill-geo.py
+
+One-off backfill that repoints existing `ip_enrichment` rows at whichever geo
+feed now has precedence. Written for the `ipinfo-lite` feed, which takes the
+country ahead of `geolite`; adding a geo feed otherwise only changes rows as
+they are re-enriched, so the map takes `ENRICHMENT_CACHE_TTL_DAYS` (14) to
+converge. Already applied on this host (2026-09-04, 8 280 of 36 156 rows).
+
+**Geo only** — reputation, confidence, categories, `is_known_attacker` and
+`updated_at` are never touched, and it makes no API calls. Do *not* do this by
+re-queueing the IPs with `force=1` instead: force bypasses the durable cache and
+re-runs the whole tiered flow, which on a dataset this size puts ~33 000 IPs
+through the Tier-2 activity gate, burns GreyNoise's weekly and AbuseIPDB's daily
+quota within minutes, and then overwrites real verdicts with the `unknown` that
+a quota-exhausted stub merges to.
+
+```bash
+# snapshot first — this is the only rollback
+docker compose exec postgres psql -U "$PG_USER" -d "$PG_DB" -c \
+  "CREATE TABLE ip_enrichment_geo_backup AS
+     SELECT src_ip, country, asn, org FROM ip_enrichment;"
+
+# dry run: reports what would change, writes nothing
+docker compose run --rm --no-deps --user root \
+  -v "$PWD/maintenance:/work:ro" --entrypoint python enrichment /work/backfill-geo.py
+
+# apply
+docker compose run --rm --no-deps --user root -e APPLY=1 \
+  -v "$PWD/maintenance:/work:ro" --entrypoint python enrichment /work/backfill-geo.py
+```
+
+Idempotent: a second run reports 0 rows to update. It runs inside the
+`enrichment` service so it inherits the database credentials and the `geoip`
+volume; `--user root` is only needed so it can read the bind-mounted script.
+
 ## Scheduled runs
 
 A crontab entry runs the **full cycle** (check → apply → commit) on the **1st of every month at 07:00** (installed by `deploy/setup.sh`):
