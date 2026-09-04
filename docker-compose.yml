@@ -368,6 +368,7 @@ services:
       VIRUSTOTAL_KEY: ${VIRUSTOTAL_KEY:-}
       VT_ENABLE: ${VT_ENABLE:-false}
       MAXMIND_LICENSE_KEY: ${MAXMIND_LICENSE_KEY:-}
+      IPINFO_TOKEN: ${IPINFO_TOKEN:-}
       FEED_REFRESH_HOURS: ${FEED_REFRESH_HOURS:-3}
       ENRICHMENT_CACHE_TTL_DAYS: ${ENRICHMENT_CACHE_TTL_DAYS:-14}
       TIER2_MIN_EVENTS: ${TIER2_MIN_EVENTS:-10}
@@ -375,6 +376,8 @@ services:
       TIER2_HIGH_THREAT_SCORE: ${TIER2_HIGH_THREAT_SCORE:-60}
       ABUSEIPDB_DAILY_QUOTA: ${ABUSEIPDB_DAILY_QUOTA:-900}
       GREYNOISE_429_COOLDOWN: ${GREYNOISE_429_COOLDOWN:-21600}
+      IPINFO_DB_MAX_AGE_HOURS: ${IPINFO_DB_MAX_AGE_HOURS:-24}
+      IPINFO_DAILY_QUOTA: ${IPINFO_DAILY_QUOTA:-0}
       FEED_STORE_CHUNK: ${FEED_STORE_CHUNK:-1000}
       ENRICH_MAX_ATTEMPTS: ${ENRICH_MAX_ATTEMPTS:-5}
       ENRICH_RECLAIM_IDLE_S: ${ENRICH_RECLAIM_IDLE_S:-300}
@@ -395,7 +398,7 @@ services:
       PG_COMMAND_TIMEOUT_S: ${PG_COMMAND_TIMEOUT_S:-30}
       PG_CONNECT_TIMEOUT_S: ${PG_CONNECT_TIMEOUT_S:-10}
     volumes:
-      - geoip_data:/geoip                 # GeoLite2 .mmdb files (see enrichment/feeds.py)
+      - geoip_data:/geoip                 # GeoLite2 + IPinfo Lite .mmdb files (see enrichment/feeds.py)
     depends_on:
       postgres:
         condition: service_healthy

@@ -10,8 +10,8 @@
 
 Stand up an internet-exposed deception sensor (Cowrie + multi-service emulator),
 capture real attacker traffic, run an IDS over it, enrich every observed IP with
-external threat intelligence from five providers (CrowdSec, AbuseIPDB, GreyNoise,
-VirusTotal, Abuse.ch Feodo Tracker) queried in parallel, correlate scans vs. attacks, profile
+external threat intelligence from six providers (CrowdSec, AbuseIPDB, GreyNoise,
+VirusTotal, Abuse.ch Feodo Tracker, IPinfo) queried in parallel, correlate scans vs. attacks, profile
 attacker behaviour, and surface all of it through a public dashboard and an
 authenticated admin backend — all on one VM, built to be modular so components
 (intel providers, correlation engine, an AI module) can be swapped or added later.
@@ -133,7 +133,8 @@ module that wants the full command transcript).
    pushed to the `enrich:queue` stream.
 4. **Enrichment** consumes `enrich:queue` via the default `tiered` provider. Tier-1
    local feeds (Abuse.ch Feodo Tracker + ThreatFox, the local CrowdSec engine's
-   decisions incl. the free CAPI community blocklist, GeoLite2 geo/ASN) always run
+   decisions incl. the free CAPI community blocklist, IPinfo Lite + GeoLite2
+   geo/ASN) always run
    first — unlimited, in-memory, and a Tier-1 hit is a verdict, not a trigger: feed-listed
    IPs spend no Tier-2 quota. Tier-2 escalates only once activity crosses
    `TIER2_MIN_EVENTS`/`TIER2_MIN_THREAT_SCORE`: GreyNoise runs first, and AbuseIPDB only
@@ -145,6 +146,15 @@ module that wants the full command transcript).
    quota allows, independent of whether the source IP has been seen again. Results
    merge (worst reputation wins, highest confidence wins, categories union) into
    `ip_enrichment`; each provider's raw response is kept separately for forensics.
+   Geo/ASN is Tier-1 throughout: two bulk databases, `ipinfo-lite` (free, needs
+   `IPINFO_TOKEN`) and `geolite`, both metadata-only and so unable to influence a
+   verdict. `ipinfo-lite` is consulted first and wins the country, `geolite` fills
+   the remainder, and `raw->'tiered'->'geo_source'` records which answered.
+   The order is deliberate: over 36 151 honeypot IPs the two cover equally (99.9%)
+   but disagree on country for 7.7%, GeoLite2 giving the LIR's registered country
+   where IPinfo gives the routed one — the difference between a shell company's
+   Seychelles paperwork and the Dutch rack the traffic actually came from.
+   Precedence is carried by `FeedProvider.priority`, not by definition order.
    (`multi` — fan out to all providers in parallel on every lookup — remains available
    as a simpler, higher-API-spend alternative; see §7.)
 5. **Analytics** consumes the `events` stream:
@@ -173,6 +183,7 @@ module that wants the full command transcript).
   | `greynoise` | Optional | Community API works without a key; a small weekly allowance, easily exhausted at honeypot volume |
   | `virustotal` | Yes | Free tier: 500 lookups/day; ToS forbids commercial use of the free tier |
   | `abusech` | No | Abuse.ch Feodo Tracker botnet C2 blocklist; no key needed |
+  | `ipinfo` | Yes (free Lite token) | Per-request geo/ASN, never a reputation. Standalone and `multi` only: `tiered` reads the same data from the `ipinfo-lite` bulk feed, so it spends no requests |
   | `multi` | — | Fans out to all providers in parallel on every lookup, merges by worst reputation; simpler but spends far more Tier-2 quota than `tiered` at the same volume |
 
   Merge logic (used by both `tiered`'s own Tier-1/Tier-2 merge and by `multi`): most

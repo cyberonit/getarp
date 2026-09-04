@@ -17,7 +17,7 @@ public dashboard with an authenticated admin backend — on a single VM.
 | Detection | Suricata IDS + custom honeypot rules | `ids/` |
 | Intel + enforcement | CrowdSec + nftables firewall bouncer (host service) | `crowdsec/` |
 | Ingest | Pipeline: normalize → Redis Streams + TimescaleDB | `pipeline/` |
-| Enrichment | Swappable provider (CrowdSec CTI / AbuseIPDB / GreyNoise) | `enrichment/` |
+| Enrichment | Swappable provider (CrowdSec CTI / AbuseIPDB / GreyNoise / IPinfo) | `enrichment/` |
 | Analytics | Pluggable scan/attack detectors, behavioral profiler, 5-min status, daily reports | `analytics/` |
 | Backend | FastAPI: JWT auth, settings, live WebSocket, report CSV export | `api/` |
 | Frontend | React "deception-grid" dashboard | `frontend/` |
@@ -89,9 +89,23 @@ default `tiered` provider splits enrichment in two:
     free `ABUSECH_KEY`)
   - `crowdsec-lapi` — every decision from the CrowdSec engine **in this stack**,
     including its ~25 k-IP CAPI community blocklist (local call, no quota)
+  - `ipinfo-lite` — IPinfo's free country/ASN database (23 MB MMDB, needs
+    `IPINFO_TOKEN`), re-downloaded at most daily (`IPINFO_DB_MAX_AGE_HOURS`)
   - `geolite` — MaxMind GeoLite2 country/ASN from `.mmdb` files in the `geoip`
     volume; auto-downloaded when `MAXMIND_LICENSE_KEY` is set (free account),
     or drop the files in manually
+
+  The last two are metadata only: they fill country/ASN/org and *never* set a
+  reputation, so they cannot move a verdict. **`ipinfo-lite` is consulted first
+  and wins the country**; `geolite` fills whatever it leaves blank, and
+  `raw->'tiered'->'geo_source'` records which one answered. Measured over 36 151
+  IPs from this honeypot, coverage is a tie (99.9% each) but the two disagree on
+  country for 7.7% of them — and 12% of the top-200 attackers by threat score.
+  The disagreements run one way: GeoLite2 reports the LIR's *registered*
+  country, IPinfo where the range is actually *routed*. For the shell-company
+  hosting that dominates the top of the attacker table (Seychelles on the
+  paperwork, Netherlands in the rack) the routed answer is the useful one.
+  Precedence is set by `FeedProvider.priority`, not by definition order.
 - **Tier 2 — per-request APIs**, spent only on IPs that earn it. `greynoise`
   runs when Tier 1 flags an IP or it crosses `TIER2_MIN_EVENTS` /
   `TIER2_MIN_THREAT_SCORE`; `abuseipdb` additionally requires
@@ -122,6 +136,7 @@ docker compose up -d enrichment    # recreate to pick up .env changes
 | `greynoise` | Optional | Community API works without key, limited results |
 | `virustotal` | Yes | Free tier: 500 lookups/day; ToS forbids commercial per-request use |
 | `abusech` | No | Abuse.ch Feodo Tracker botnet C2 blocklist; no key needed |
+| `ipinfo` | Yes (free Lite token) | Per-request geo/ASN, no reputation. Standalone/`multi` only — `tiered` reads the same data from the `ipinfo-lite` feed and spends no requests |
 | `multi` | — | Queries **all** providers in parallel, ignoring quotas — lab use only |
 
 **Merge logic** (`tiered` and `multi`): most severe reputation wins (malicious > suspicious > unknown > clean), highest confidence wins, `is_known_attacker` is true if any provider flags the IP, geo/ASN uses the first non-null value, categories are the union of all providers. Each provider's raw response is stored separately for forensics.

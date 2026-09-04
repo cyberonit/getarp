@@ -396,6 +396,127 @@ class VirusTotalProvider(EnrichmentProvider):
 
 
 @register
+class IPinfoProvider(EnrichmentProvider):
+    """IPinfo Lite (https://api.ipinfo.io/lite/<ip>) — country/continent + ASN.
+
+    Metadata only: it fills country/asn/org and never sets a reputation, so a
+    hit here can neither raise nor clear a verdict.
+
+    The `tiered` provider does NOT use this class — it gets the same data from
+    IPinfoLiteFeed, one bulk download a day instead of a request per IP. This
+    is the standalone path: ENRICHMENT_PROVIDER=ipinfo for metadata-only mode,
+    and the fan-out in `multi`. Note it reads country_code, where the bulk
+    database calls that field country (see IPinfoLiteFeed).
+
+    The Lite endpoint is free and, unlike the Tier-2 reputation APIs, carries
+    no small daily cap worth budgeting against, so there is no default local
+    budget: IPINFO_DAILY_QUOTA is opt-in (0 = unbudgeted) and a 429 is honoured
+    with a cooldown. Geo/ASN barely moves, so the per-IP cache runs for days,
+    not hours."""
+    name = "ipinfo"
+    URL = "https://api.ipinfo.io/lite/"
+
+    _MAX_CACHE = 10000
+    _DEFAULT_CACHE_TTL = 604800     # 7 d — geo/ASN is near-static
+    _DEFAULT_429_COOLDOWN = 3600
+    _AUTH_COOLDOWN = 3600           # a rejected token will not fix itself soon
+
+    def __init__(self, settings: dict):
+        super().__init__(settings)
+        self._cache: dict[str, Enrichment] = {}
+        self._cache_ts: dict[str, float] = {}
+        self._cache_ttl = int(settings.get("IPINFO_CACHE_TTL_S",
+                                           self._DEFAULT_CACHE_TTL))
+        self._cooldown = int(settings.get("IPINFO_429_COOLDOWN",
+                                          self._DEFAULT_429_COOLDOWN))
+        self._daily_quota = int(settings.get("IPINFO_DAILY_QUOTA", 0))
+        self._daily_count = 0
+        self._daily_reset: float = 0.0
+        self._rate_limited_until: float = 0.0
+
+    def _cache_put(self, ip: str, e: Enrichment):
+        if len(self._cache) >= self._MAX_CACHE:
+            oldest = min(self._cache_ts, key=self._cache_ts.get)
+            del self._cache[oldest], self._cache_ts[oldest]
+        self._cache[ip] = e
+        self._cache_ts[ip] = time.time()
+
+    def _reset_daily_if_needed(self):
+        now = time.time()
+        if now >= self._daily_reset:
+            self._daily_count = 0
+            self._daily_reset = now - (now % 86400) + 86400
+
+    async def enrich(self, ip: str) -> Enrichment:
+        now = time.time()
+        cached = self._cache.get(ip)
+        if cached and now - self._cache_ts.get(ip, 0) < self._cache_ttl:
+            return cached
+
+        e = Enrichment(src_ip=ip, provider=self.name)
+        token = self.settings.get("IPINFO_TOKEN")
+        if not token:
+            e.categories = ["api-key-missing"]
+            return e
+
+        if self._daily_quota:
+            self._reset_daily_if_needed()
+            if self._daily_count >= self._daily_quota:
+                e.raw = {"quota_exhausted": True,
+                         "daily_count": self._daily_count,
+                         "resets_at": int(self._daily_reset)}
+                return e
+
+        if now < self._rate_limited_until:
+            e.raw = {"rate_limited": True,
+                     "retry_after": int(self._rate_limited_until - now)}
+            return e
+
+        try:
+            async with httpx.AsyncClient(timeout=http_timeout(8)) as c:
+                resp = await c.get(self.URL + ip,
+                                   headers={"Authorization": f"Bearer {token}"})
+            self._daily_count += 1
+
+            if resp.status_code == 429:
+                retry = int(resp.headers.get("Retry-After", 0)) or self._cooldown
+                self._rate_limited_until = time.time() + retry
+                print(f"[ipinfo] rate limited, backing off {retry}s", flush=True)
+                e.raw = {"rate_limited": True, "retry_after": retry}
+                return e
+
+            if resp.status_code in (401, 403):
+                # Every subsequent IP would fail identically; back off rather
+                # than spend one rejected request per enrichment.
+                self._rate_limited_until = time.time() + self._AUTH_COOLDOWN
+                print(f"[ipinfo] token rejected (HTTP {resp.status_code}), "
+                      f"pausing {self._AUTH_COOLDOWN}s", flush=True)
+                e.categories = ["api-key-invalid"]
+                e.raw = {"auth_failed": True, "status": resp.status_code}
+                return e
+
+            resp.raise_for_status()
+            d = resp.json()
+            e.raw = d
+            if d.get("bogon"):
+                # Private/reserved space: a definitive "no geo", worth caching.
+                e.categories = ["bogon"]
+                self._cache_put(ip, e)
+                return e
+            e.country = d.get("country_code")
+            # Stored bare, as geolite/virustotal do, so the merged asn field is
+            # one format regardless of which source filled it.
+            asn = str(d.get("asn") or "")
+            e.asn = asn[2:] if asn.upper().startswith("AS") else asn or None
+            e.org = d.get("as_name")
+        except Exception as ex:
+            e.raw = {"error": str(ex)}
+            return e
+        self._cache_put(ip, e)
+        return e
+
+
+@register
 class AbusechProvider(EnrichmentProvider):
     """Abuse.ch provider. Uses the ThreatFox API when ABUSECH_KEY is set,
     falls back to the public Feodo Tracker IP blocklist otherwise."""
@@ -578,8 +699,13 @@ class TieredProvider(EnrichmentProvider):
     """Two-tier enrichment (the default mode, ENRICHMENT_PROVIDER=tiered).
 
     Tier 1 — local feeds (feeds.py): abuse.ch blocklists, the local CrowdSec
-    engine's decisions (incl. the free CAPI community blocklist), and GeoLite2
-    geo/ASN. Unlimited, matched in memory, always run.
+    engine's decisions (incl. the free CAPI community blocklist), and IPinfo
+    Lite / GeoLite2 geo/ASN. Unlimited, matched in memory, always run.
+
+    Geo/ASN comes from two Tier-1 feeds that both cover ~100% of traffic:
+    ipinfo-lite is consulted first and geolite fills what it misses (see
+    IPinfoLiteFeed for why that order). Neither sets a reputation.
+    raw->'tiered'->'geo_source' records which one answered.
 
     Tier 2 — per-request APIs, spent only on IPs that earn it. A Tier-1 hit is
     a verdict, not a trigger: feed-listed IPs spend no Tier-2 quota.
@@ -644,6 +770,14 @@ class TieredProvider(EnrichmentProvider):
                 if _REP_SEVERITY.get(hit.reputation, 0) >= 2:
                     flagged = True
 
+        # Which feed actually supplied the geo. Both geo feeds are consulted in
+        # priority order and merge_enrichments keeps the first non-null value,
+        # so this is the first one that answered — worth recording, because the
+        # two disagree on country for a meaningful slice of honeypot traffic.
+        geo_source = next(
+            (n for n, r in named
+             if not isinstance(r, Exception) and (r.country or r.asn)), "none")
+
         events, score = await self._activity(ip)
         active = events >= self._min_events or score >= self._min_score
         high = score >= self._high_score
@@ -683,5 +817,6 @@ class TieredProvider(EnrichmentProvider):
             "event_count": events, "threat_score": score, "tier1_flagged": flagged,
             "tier2_ran": ran, "tier2_deferred": deferred,
             "tier2_reason": "active" if active else "below-threshold",
+            "geo_source": geo_source,
         }
         return merged

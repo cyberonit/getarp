@@ -8,11 +8,13 @@ last cached copy immediately) and refresh() every FEED_REFRESH_HOURS.
 Fail-safe contract: refresh() must never raise past its own logging and must
 leave the previous index intact when a download fails.
 """
+import contextlib
 import ipaddress
 import json
 import os
 import tarfile
 import tempfile
+import time
 
 import httpx
 
@@ -37,11 +39,20 @@ def register_feed(cls):
 
 
 def get_feed_providers(settings: dict) -> list["FeedProvider"]:
-    return [cls(settings) for cls in _FEED_REGISTRY.values()]
+    """Feeds in consultation order — see FeedProvider.priority."""
+    # Stable, so feeds sharing a priority keep their registration order.
+    return [cls(settings) for cls in
+            sorted(_FEED_REGISTRY.values(), key=lambda c: c.priority)]
 
 
 class FeedProvider:
     name = "feed-base"
+    # Consultation order, ascending. This is precedence, not just tidiness:
+    # merge_enrichments keeps the FIRST non-null country/asn/org it is given,
+    # so of two geo feeds the one consulted first supplies the geo. Reputation
+    # feeds keep the default — their merge (worst-reputation-wins, categories
+    # unioned) does not depend on order.
+    priority = 50
 
     def __init__(self, settings: dict):
         self.settings = settings
@@ -268,6 +279,7 @@ class GeoLiteFeed(FeedProvider):
     (GeoLite2 EULA: free, requires a MaxMind account); without a key it serves
     .mmdb files dropped into the volume manually, or stays inactive."""
     name = "geolite"
+    priority = 70          # consulted after ipinfo-lite; see IPinfoLiteFeed
     _EDITIONS = {"GeoLite2-City": "city", "GeoLite2-ASN": "asn"}
     _DL_URL = ("https://download.maxmind.com/app/geoip_download"
                "?edition_id={edition}&license_key={key}&suffix=tar.gz")
@@ -353,3 +365,122 @@ class GeoLiteFeed(FeedProvider):
         except Exception:
             return None
         return e if got else None
+
+
+@register_feed
+class IPinfoLiteFeed(FeedProvider):
+    """IPinfo Lite country + ASN, as the free bulk MMDB (needs IPINFO_TOKEN).
+
+    Metadata only, like geolite: fills country/asn/org and never sets a
+    reputation, so it cannot move a verdict. It is a bulk feed rather than the
+    per-request API for the usual Tier-1 reason — one download per day answers
+    every IP, so no lookup ever spends a request.
+
+    It is consulted BEFORE geolite (priority) because the two disagree on
+    country for ~8% of the IPs this honeypot sees, and they disagree in a
+    consistent direction: GeoLite2 reports the LIR's registered country while
+    IPinfo reports where the range is actually routed. For hosts behind shell
+    companies — the bulletproof-hosting pattern that dominates the top of the
+    attacker table — the registered country is the paperwork, not the rack.
+    GeoLite2 still fills anything IPinfo leaves blank.
+
+    Beware the field names: this database and the api.ipinfo.io/lite JSON use
+    the same keys for different things — "country" is the ISO code here and the
+    full name there (which is why IPinfoProvider reads country_code)."""
+    name = "ipinfo-lite"
+    priority = 60          # before geolite, after the reputation feeds
+    URL = "https://ipinfo.io/data/free/country_asn.mmdb"
+    _FILENAME = "ipinfo-country_asn.mmdb"
+    # Upstream rebuilds daily, so re-downloading 23 MB every FEED_REFRESH_HOURS
+    # would be several times the bytes for the same file.
+    _DEFAULT_MAX_AGE_H = 24
+    # A truncated download that still parses would silently shrink coverage;
+    # the real database is ~23 MB.
+    _MIN_BYTES = 1_000_000
+
+    def __init__(self, settings: dict):
+        super().__init__(settings)
+        self._dir = settings.get("GEOIP_DIR", "/geoip")
+        self._path = os.path.join(self._dir, self._FILENAME)
+        self._token = settings.get("IPINFO_TOKEN", "")
+        self._max_age = float(settings.get("IPINFO_DB_MAX_AGE_HOURS",
+                                           self._DEFAULT_MAX_AGE_H)) * 3600
+        self._reader = None
+
+    def _open(self):
+        try:
+            import maxminddb
+        except ImportError:
+            return
+        if not os.path.exists(self._path):
+            return
+        try:
+            reader = maxminddb.open_database(self._path)
+        except Exception as ex:
+            print(f"[feeds] {self.name}: cannot open {self._path}: {ex}", flush=True)
+            return
+        old, self._reader = self._reader, reader
+        if old is not None:
+            # The replaced file's inode stays alive until this closes, so an
+            # in-flight lookup during a refresh reads the old db, not a hole.
+            with contextlib.suppress(Exception):
+                old.close()
+        print(f"[feeds] {self.name}: database open ({self._FILENAME})", flush=True)
+
+    async def load(self, pool):
+        self._open()
+
+    async def refresh(self, pool):
+        if not self._token:
+            return
+        try:
+            fresh = time.time() - os.path.getmtime(self._path) < self._max_age
+        except OSError:
+            fresh = False
+        if fresh:
+            if self._reader is None:
+                self._open()
+            return
+
+        tmp = self._path + ".part"
+        try:
+            # Token goes in the header, never the query string: a failure here
+            # is logged, and the admin UI can read this container's logs.
+            async with httpx.AsyncClient(timeout=http_timeout(120),
+                                         follow_redirects=True) as c:
+                async with c.stream("GET", self.URL,
+                                    headers={"Authorization": f"Bearer {self._token}"}) as resp:
+                    resp.raise_for_status()
+                    with open(tmp, "wb") as fh:
+                        async for chunk in resp.aiter_bytes(DOWNLOAD_CHUNK):
+                            fh.write(chunk)
+            size = os.path.getsize(tmp)
+            if size < self._MIN_BYTES:
+                raise ValueError(f"download too small ({size} bytes)")
+            # Atomic: a half-written file can never replace a working database.
+            os.replace(tmp, self._path)
+            print(f"[feeds] {self.name}: downloaded {size // 1024 // 1024} MB", flush=True)
+            self._open()
+        except Exception as ex:
+            with contextlib.suppress(OSError):
+                os.remove(tmp)
+            print(f"[feeds] {self.name}: refresh failed, keeping existing "
+                  f"database: {ex}", flush=True)
+
+    def lookup(self, ip: str) -> Enrichment | None:
+        if self._reader is None:
+            return None
+        try:
+            rec = self._reader.get(ip) or {}
+        except Exception:
+            return None
+        asn = str(rec.get("asn") or "")
+        asn = asn[2:] if asn.upper().startswith("AS") else asn
+        country, org = rec.get("country"), rec.get("as_name")
+        if not (country or asn or org):
+            return None
+        e = Enrichment(src_ip=ip, provider=self.name)
+        e.country, e.asn, e.org = country or None, asn or None, org or None
+        e.raw = {"source": self.name, "as_domain": rec.get("as_domain"),
+                 "continent": rec.get("continent")}
+        return e

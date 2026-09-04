@@ -81,6 +81,8 @@ _HOSTS = {
     "greynoise": "greynoise.io",
     "abuseipdb": "abuseipdb.com",
     "virustotal": "virustotal.com",
+    "ipinfo": "api.ipinfo.io",
+    "ipinfo-lite": "ipinfo.io/data/free",
     "crowdsec-cti": "cti.api.crowdsec.net",
     "crowdsec-lapi": "crowdsec:8080",
     "feodo": "feodotracker.abuse.ch",
@@ -89,11 +91,13 @@ _HOSTS = {
 
 
 class SpyResponse:
-    def __init__(self, status_code=200, payload=None, headers=None, text=""):
+    def __init__(self, status_code=200, payload=None, headers=None, text="",
+                 content=b""):
         self.status_code = status_code
         self._payload = payload if payload is not None else {}
         self.headers = headers or {}
         self.text = text
+        self.content = content
 
     def json(self):
         return self._payload
@@ -101,6 +105,10 @@ class SpyResponse:
     def raise_for_status(self):
         if self.status_code >= 400:
             raise RuntimeError(f"HTTP {self.status_code}")
+
+    async def aiter_bytes(self, chunk_size=65536):
+        for i in range(0, len(self.content), chunk_size):
+            yield self.content[i:i + chunk_size]
 
 
 def _default_response(url: str) -> SpyResponse:
@@ -113,6 +121,11 @@ def _default_response(url: str) -> SpyResponse:
         return SpyResponse(payload={"data": {"attributes": {
             "last_analysis_stats": {"malicious": 6, "harmless": 60},
             "country": "XX", "tags": []}}})
+    if "api.ipinfo.io" in url:
+        return SpyResponse(payload={"ip": "0.0.0.0", "asn": "AS64500",
+                                    "as_name": "SpyGeo", "as_domain": "spy.test",
+                                    "country_code": "XX", "country": "Spyland",
+                                    "continent_code": "SP", "continent": "Spy"})
     if "crowdsec:8080" in url:
         return SpyResponse(payload=[])
     if "feodotracker" in url:
@@ -129,6 +142,9 @@ class SpyAsyncClient:
     calls: dict[str, int] = {}
     routes: list[tuple[str, Exception]] = []
     responses: list[tuple[str, SpyResponse]] = []
+    # Every request as (url, kwargs) — lets a test assert on what was actually
+    # put on the wire, e.g. that a token went in a header and not the URL.
+    seen: list[tuple[str, dict]] = []
 
     def __init__(self, **kwargs):
         pass
@@ -139,7 +155,8 @@ class SpyAsyncClient:
     async def __aexit__(self, *exc):
         return False
 
-    def _hit(self, url: str) -> SpyResponse:
+    def _hit(self, url: str, **kwargs) -> SpyResponse:
+        SpyAsyncClient.seen.append((url, kwargs))
         for name, frag in _HOSTS.items():
             if frag in url:
                 SpyAsyncClient.calls[name] = SpyAsyncClient.calls.get(name, 0) + 1
@@ -152,10 +169,24 @@ class SpyAsyncClient:
         return _default_response(url)
 
     async def get(self, url, **kwargs):
-        return self._hit(url)
+        return self._hit(url, **kwargs)
 
     async def post(self, url, **kwargs):
-        return self._hit(url)
+        return self._hit(url, **kwargs)
+
+    def stream(self, method, url, **kwargs):
+        """httpx's streaming API is an async context manager, not a coroutine —
+        used by the two feeds that download a database to disk."""
+        resp = self._hit(url, **kwargs)
+
+        class _Stream:
+            async def __aenter__(self_inner):
+                return resp
+
+            async def __aexit__(self_inner, *exc):
+                return False
+
+        return _Stream()
 
     @classmethod
     def count(cls, name: str) -> int:
@@ -167,6 +198,7 @@ def spy(monkeypatch):
     SpyAsyncClient.calls = {}
     SpyAsyncClient.routes = []
     SpyAsyncClient.responses = []
+    SpyAsyncClient.seen = []
     monkeypatch.setattr(providers_mod.httpx, "AsyncClient", SpyAsyncClient)
     monkeypatch.setattr(feeds_mod.httpx, "AsyncClient", SpyAsyncClient)
     yield SpyAsyncClient

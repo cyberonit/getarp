@@ -121,6 +121,8 @@ ask_optional GREYNOISE_KEY    "GreyNoise API key"
 ask_optional VIRUSTOTAL_KEY   "VirusTotal API key"
 echo "  MaxMind GeoLite2: https://www.maxmind.com/en/geolite2/signup (free; fills country/ASN for every IP)"
 ask_optional MAXMIND_LICENSE_KEY "MaxMind license key"
+echo "  IPinfo Lite: https://ipinfo.io/signup (free; geo/ASN, more accurate than GeoLite2 on hosting ranges)"
+ask_optional IPINFO_TOKEN     "IPinfo token"
 
 # Always "tiered", whichever keys were supplied above — it consumes all of them
 # and gates the metered ones behind its activity thresholds, and it works with
@@ -181,6 +183,7 @@ echo "ABUSECH_KEY=$ABUSECH_KEY"
 echo "GREYNOISE_KEY=$GREYNOISE_KEY"
 echo "VIRUSTOTAL_KEY=$VIRUSTOTAL_KEY"
 echo "MAXMIND_LICENSE_KEY=$MAXMIND_LICENSE_KEY"
+echo "IPINFO_TOKEN=$IPINFO_TOKEN"
 echo ""
 echo "SCAN_PORT_THRESHOLD=5"
 echo "SCAN_WINDOW_SECONDS=60"

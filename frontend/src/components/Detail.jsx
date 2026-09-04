@@ -25,9 +25,11 @@ function providerHint(data) {
   return ''
 }
 
-// Metadata-only providers (e.g. geolite) never set a reputation — they're
-// shown via the merged country/asn/org fields, not as a source row here.
-const METADATA_ONLY = new Set(['geolite'])
+// Metadata-only sources never set a reputation — they're shown via the merged
+// country/asn/org fields, not as a source row here. 'ipinfo-lite' is the Tier-1
+// feed (what `tiered` writes); 'ipinfo' is the per-request provider, seen only
+// in standalone/multi mode.
+const METADATA_ONLY = new Set(['geolite', 'ipinfo-lite', 'ipinfo'])
 
 function IntelSources({ raw }) {
   if (!raw || typeof raw !== 'object') return null

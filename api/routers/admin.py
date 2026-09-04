@@ -32,7 +32,7 @@ ALLOWED_SETTINGS = _INT_SETTINGS | _STR_SETTINGS
 # default a value the API rejected — re-saving the current setting 400'd, and
 # switching away from it was one-way.
 VALID_PROVIDERS = {"tiered", "crowdsec", "abuseipdb", "greynoise", "virustotal",
-                   "abusech", "multi"}
+                   "abusech", "ipinfo", "multi"}
 # Detector registry keys — keep in sync with the @register'd Detector classes
 # in analytics/correlation/. Unknown keys are silently skipped by the engine,
 # so a typo here would disable detection without any error.
